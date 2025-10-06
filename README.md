@@ -59,3 +59,77 @@ If you discover a security vulnerability within Laravel, please send an e-mail t
 ## License
 
 The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
+
+# MCP Tools
+
+## Textract searchable-PDF pipeline
+This project includes a pipeline that:
+- fetches PDFs from a Google Drive folder (via Service Account),
+- uploads them to S3,
+- runs AWS Textract OCR asynchronously,
+- reconstructs a “searchable” PDF by overlaying an invisible text layer (FPDI + TCPDF),
+- stores the raw Textract JSON and the final searchable PDF back to S3.
+
+### 1) Install PHP packages
+Already included in composer.json; if needed, ensure dependencies are installed:
+
+```
+composer install
+```
+
+### 2) Configure .env
+Add the following keys (see `.env.example`):
+
+```
+# Google Drive (Service Account)
+GOOGLE_APPLICATION_CREDENTIALS=/absolute/path/to/service-account.json
+GOOGLE_DRIVE_FOLDER_ID=YOUR_FOLDER_ID
+GOOGLE_IMPERSONATE_USER=
+
+# AWS / S3 / Textract
+AWS_DEFAULT_REGION=eu-central-1
+AWS_ACCESS_KEY_ID=...
+AWS_SECRET_ACCESS_KEY=...
+AWS_BUCKET=your-s3-bucket
+AWS_URL=
+AWS_ENDPOINT=
+AWS_USE_PATH_STYLE_ENDPOINT=false
+
+# S3 prefixes for pipeline artifacts
+S3_INPUT_PREFIX=textract/input
+S3_OUTPUT_PREFIX=textract/output
+S3_JSON_PREFIX=textract/json
+
+# Queue
+QUEUE_CONNECTION=database
+```
+
+Share the Drive folder with the Service Account email and enable the Drive API in Google Cloud.
+Ensure the S3 bucket exists and the IAM user/role has permissions:
+- s3:GetObject, s3:PutObject, s3:ListBucket
+- textract:StartDocumentTextDetection, textract:GetDocumentTextDetection
+
+### 3) Migrate database
+
+```
+php artisan migrate --force
+```
+
+This creates the `textract_jobs` table for job tracking.
+
+### 4) Run the pipeline
+Start a queue worker and enqueue jobs for a Drive folder:
+
+```
+php artisan queue:work --queue=textract
+php artisan textract:process-drive-folder YOUR_FOLDER_ID --limit=3
+```
+
+Artifacts will appear on S3:
+- `${AWS_BUCKET}/${S3_JSON_PREFIX}/{drive_file_id}.json`
+- `${AWS_BUCKET}/${S3_OUTPUT_PREFIX}/{drive_file_id}-searchable.pdf`
+
+### Notes
+- FPDI/TCPDF overlays OCR LINE blocks as invisible text; adjust opacity in `PdfReconstructor` if you want to debug placement.
+- For large PDFs, consider SNS/SQS instead of polling Textract.
+- The pipeline defaults to LINE blocks; WORD-level placement is possible with minor changes.

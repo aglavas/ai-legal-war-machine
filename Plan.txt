@@ -1,0 +1,551 @@
+U nastavku je kompletna, produkcijski orijentirana Laravel implementacija koja:
+- dohvaća PDF-ove iz određenog Google Drive foldera,
+- prenosi ih na S3,
+- šalje na AWS Textract (asinkrono) za OCR,
+- preuzima OCR rezultate,
+- rekonstruira “searchable” PDF tako da preko originalnih stranica doda nevidljivi tekst sloj na temelju Textract koordinata.
+
+Napomene prije početka:
+- Textract za PDF-ove i TIFF-ove radi asinkrono i dokument mora biti na S3 (Bytes upload vrijedi samo za single-page slike kao JPEG/PNG).
+- Rekonstrukcija “searchable” PDF-a je napravljena preko FPDI + TCPDF: uvezemo originalnu stranicu kao pozadinu i položimo OCR-irane retke kao nevidljivi tekst na točne koordinate (Textract vraća normalizirane koordinate 0–1 po širini/visini).
+
+1) Preduvjeti i instalacija paketa
+- PHP 8.2+, Laravel 10/11
+- Composer paketi:
+  - AWS SDK: aws/aws-sdk-php
+  - Google API klijent: google/apiclient
+  - PDF overlay: setasign/fpdi-tcpdf (povlači tcpdf i fpdi)
+  - Laravel S3 driver je već uključen (league/flysystem-aws-s3-v3)
+
+Primjer:
+```
+composer require aws/aws-sdk-php:^3.300 google/apiclient:^2.15 setasign/fpdi-tcpdf:^2.5
+```
+
+2) Konfiguracija okruženja (.env)
+Unesite varijable:
+```
+# Google Drive – koristimo Service Account i dijeljeni folder
+GOOGLE_APPLICATION_CREDENTIALS=/absolute/path/to/service-account.json
+GOOGLE_DRIVE_FOLDER_ID=YOUR_FOLDER_ID   # ID ciljnog foldera na Driveu (share-ajte ga s SA emailom)
+GOOGLE_IMPERSONATE_USER=                # opcionalno, ako koristite domain-wide delegation
+
+# AWS / S3 / Textract
+AWS_DEFAULT_REGION=eu-central-1         # ili vaša regija
+AWS_ACCESS_KEY_ID=AKIA...
+AWS_SECRET_ACCESS_KEY=...
+AWS_BUCKET=your-s3-bucket
+AWS_URL=                                 # opcionalno
+AWS_USE_PATH_STYLE_ENDPOINT=false
+
+# Aplikacijski prefiksi na S3
+S3_INPUT_PREFIX=textract/input
+S3_OUTPUT_PREFIX=textract/output
+S3_JSON_PREFIX=textract/json
+```
+
+Provjerite config/filesystems.php da S3 disk koristi iste varijable (standardni Laravel S3 disk).
+
+3) Google Drive: servis za listanje i preuzimanje PDF-ova
+app/Services/GoogleDriveService.php
+```
+<?php
+
+namespace App\Services;
+
+use Google\Client as GoogleClient;
+use Google\Service\Drive;
+
+class GoogleDriveService
+{
+    protected Drive $drive;
+
+    public function __construct()
+    {
+        $client = new GoogleClient();
+        $client->setAuthConfig(env('GOOGLE_APPLICATION_CREDENTIALS'));
+        $client->setScopes([Drive::DRIVE_READONLY]);
+        $client->setSubject(env('GOOGLE_IMPERSONATE_USER')); // ako koristite DWD
+        $this->drive = new Drive($client);
+    }
+
+    /**
+     * Vrati listu PDF-ova u folderu (Drive folder ID).
+     * @return array [ [id, name, mimeType, size], ... ]
+     */
+    public function listPdfsInFolder(string $folderId, int $pageSize = 100): array
+    {
+        $files = [];
+        $pageToken = null;
+        $q = sprintf("'%s' in parents and mimeType='application/pdf' and trashed=false", $folderId);
+
+        do {
+            $response = $this->drive->files->listFiles([
+                'q' => $q,
+                'pageSize' => $pageSize,
+                'supportsAllDrives' => true,
+                'includeItemsFromAllDrives' => true,
+                'fields' => 'nextPageToken, files(id, name, mimeType, size)',
+                'pageToken' => $pageToken,
+            ]);
+
+            foreach ($response->getFiles() as $file) {
+                $files[] = [
+                    'id' => $file->getId(),
+                    'name' => $file->getName(),
+                    'mimeType' => $file->getMimeType(),
+                    'size' => (int) $file->getSize(),
+                ];
+            }
+            $pageToken = $response->getNextPageToken();
+        } while ($pageToken);
+
+        return $files;
+    }
+
+    /**
+     * Preuzmi PDF s Drive-a u lokalni privremeni path.
+     * @return string putanja do lokalne datoteke
+     */
+    public function downloadFile(string $fileId, ?string $targetPath = null): string
+    {
+        $targetPath ??= storage_path('app/tmp/'. $fileId . '.pdf');
+        @mkdir(dirname($targetPath), 0775, true);
+
+        $response = $this->drive->files->get($fileId, ['alt' => 'media']);
+        $content = $response->getBody()->getContents();
+        file_put_contents($targetPath, $content);
+
+        return $targetPath;
+    }
+}
+```
+
+4) Textract servis: upload na S3, start i dohvat rezultata
+app/Services/TextractService.php
+```
+<?php
+
+namespace App\Services;
+
+use Aws\Textract\TextractClient;
+use Illuminate\Support\Facades\Storage;
+
+class TextractService
+{
+    protected TextractClient $client;
+    protected string $bucket;
+    protected string $inputPrefix;
+    protected string $jsonPrefix;
+
+    public function __construct()
+    {
+        $this->client = new TextractClient([
+            'version' => '2018-06-27',
+            'region'  => env('AWS_DEFAULT_REGION'),
+            'credentials' => [
+                'key' => env('AWS_ACCESS_KEY_ID'),
+                'secret' => env('AWS_SECRET_ACCESS_KEY'),
+            ],
+        ]);
+
+        $this->bucket = env('AWS_BUCKET');
+        $this->inputPrefix = trim(env('S3_INPUT_PREFIX', 'textract/input'), '/');
+        $this->jsonPrefix = trim(env('S3_JSON_PREFIX', 'textract/json'), '/');
+    }
+
+    public function uploadToS3(string $localPath, string $s3Key): string
+    {
+        $disk = Storage::disk('s3');
+        $disk->put($s3Key, fopen($localPath, 'r'), ['visibility' => 'private']);
+        return $s3Key;
+    }
+
+    /**
+     * Pokreće asinkrono detektiranje teksta (LINE/WORD). Za Forms/Tables koristite startDocumentAnalysis.
+     */
+    public function startDocumentTextDetection(string $s3Key, ?string $jobTag = null): string
+    {
+        $result = $this->client->startDocumentTextDetection([
+            'DocumentLocation' => [
+                'S3Object' => ['Bucket' => $this->bucket, 'Name' => $s3Key],
+            ],
+            'JobTag' => $jobTag ?? basename($s3Key),
+        ]);
+
+        return $result->get('JobId');
+    }
+
+    /**
+     * Poll-anje rezultata dok ne završi. Vraća sve blokove (stranice, linije, riječi).
+     */
+    public function waitAndFetchTextDetection(string $jobId, int $sleepSeconds = 5, int $maxWaitSeconds = 1800): array
+    {
+        $elapsed = 0;
+        do {
+            $statusResp = $this->client->getDocumentTextDetection([
+                'JobId' => $jobId,
+                'MaxResults' => 1000,
+            ]);
+
+            $status = $statusResp->get('JobStatus');
+            if ($status === 'SUCCEEDED') {
+                // prikupi sve stranice kroz paginaciju
+                $blocks = [];
+                $nextToken = null;
+                do {
+                    $pageResp = $this->client->getDocumentTextDetection([
+                        'JobId' => $jobId,
+                        'MaxResults' => 1000,
+                        'NextToken' => $nextToken,
+                    ]);
+
+                    $blocks = array_merge($blocks, $pageResp->get('Blocks') ?? []);
+                    $nextToken = $pageResp->get('NextToken');
+                } while ($nextToken);
+
+                return $blocks;
+            }
+
+            if ($status === 'FAILED' || $status === 'PARTIAL_SUCCESS') {
+                throw new \RuntimeException("Textract job {$jobId} status: {$status}");
+            }
+
+            sleep($sleepSeconds);
+            $elapsed += $sleepSeconds;
+
+        } while ($elapsed < $maxWaitSeconds);
+
+        throw new \RuntimeException("Textract job {$jobId} timed out after {$maxWaitSeconds}s.");
+    }
+
+    /**
+     * Grupiraj LINE blokove po stranici. Rezultat: [ pageNumber => [ [text, bbox], ... ] ]
+     */
+    public function collectLinesByPage(array $blocks): array
+    {
+        $pages = [];
+        foreach ($blocks as $b) {
+            if (($b['BlockType'] ?? '') === 'LINE') {
+                $page = (int)($b['Page'] ?? 1);
+                $text = $b['Text'] ?? '';
+                $bb = $b['Geometry']['BoundingBox'] ?? null;
+                if (!$bb || $text === '') continue;
+
+                $pages[$page][] = [
+                    'text' => $text,
+                    'left' => (float)$bb['Left'],
+                    'top' => (float)$bb['Top'],
+                    'width' => (float)$bb['Width'],
+                    'height' => (float)$bb['Height'],
+                ];
+            }
+        }
+        ksort($pages);
+        return $pages;
+    }
+}
+```
+
+5) Rekonstrukcija “searchable” PDF-a (overlay nevidljivog teksta)
+- Koristimo FPDI + TCPDF. Uvezemo originalnu stranicu kao template i za svaku LINE stavku iz Textracta postavimo tekst na koordinatu.
+- Textract koordinate su normalizirane (0–1) prema širini/visini stranice. TCPDF radi u mm i očekuje veličinu fonta u pt.
+- Formula: fontSizePt ≈ (line_bbox_height_mm) × 2.83465 (jer 1 pt ≈ 0.35278 mm). Y koordinata u TCPDF je prema gornjem rubu; Text() pozicionira baseline pa ćemo dodati visinu retka za baseline.
+
+app/Services/PdfReconstructor.php
+```
+<?php
+
+namespace App\Services;
+
+use setasign\Fpdi\Tcpdf\Fpdi;
+
+class PdfReconstructor
+{
+    /**
+     * Kreira searchable PDF: original kao pozadina + nevidljivi tekst layer prema OCR LINE koordinatama.
+     * @param array $linesByPage izlaz TextractService::collectLinesByPage()
+     */
+    public function buildSearchablePdf(string $sourcePdfPath, array $linesByPage, string $targetPdfPath): string
+    {
+        @mkdir(dirname($targetPdfPath), 0775, true);
+
+        $pdf = new Fpdi();
+        $pdf->setPrintHeader(false);
+        $pdf->setPrintFooter(false);
+        $pdf->SetAutoPageBreak(false);
+        $pdf->SetCreator('Laravel Textract');
+        $pdf->SetAuthor('Laravel App');
+        $pdf->SetTitle('OCR Searchable PDF');
+
+        $pageCount = $pdf->setSourceFile($sourcePdfPath);
+
+        // Učitaj Unicode font (TCPDF bundle sadrži dejavusans)
+        $font = 'dejavusans';
+
+        for ($pageNo = 1; $pageNo <= $pageCount; $pageNo++) {
+            $tplId = $pdf->importPage($pageNo);
+            $size = $pdf->getTemplateSize($tplId);
+
+            // Odredi usmjerenje prema veličini
+            $orientation = ($size['width'] > $size['height']) ? 'L' : 'P';
+            $pdf->AddPage($orientation, [$size['width'], $size['height']]); // mm
+            $pdf->useTemplate($tplId, 0, 0, $size['width'], $size['height'], true);
+
+            $pageWidthMm  = $size['width'];
+            $pageHeightMm = $size['height'];
+
+            // Postavi potpuno nevidljivi tekst (alpha 0 – tekst postoji, ali se ne vidi)
+            // Ako želite da bude vrlo blago vidljiv (radi provjere), stavite 0.05
+            if (method_exists($pdf, 'SetAlpha')) {
+                $pdf->SetAlpha(0.0);
+            }
+
+            $pdf->SetTextColor(0, 0, 0);
+            $pdf->SetFont($font, '', 10);
+
+            $lines = $linesByPage[$pageNo] ?? [];
+            foreach ($lines as $line) {
+                $leftMm   = $line['left']   * $pageWidthMm;
+                $topMm    = $line['top']    * $pageHeightMm;
+                $heightMm = $line['height'] * $pageHeightMm;
+
+                $fontSizePt = max(6, $heightMm * 2.83465); // donja granica 6pt
+                $pdf->SetFont($font, '', $fontSizePt);
+
+                // TCPDF Text(x,y,text) koristi baseline za y; podignemo y za visinu retka
+                $baselineY = $topMm + $heightMm;
+
+                // Ograničimo širinu retka kako se ne bi lomio (ako želite precizno, koristite Cell s width)
+                $pdf->SetXY($leftMm, $baselineY);
+                $pdf->Cell($line['width'] * $pageWidthMm, 0, $line['text'], 0, 1, 'L', false, '', 0, false, 'T', 'T');
+            }
+
+            if (method_exists($pdf, 'SetAlpha')) {
+                $pdf->SetAlpha(1.0); // reset za svaki slučaj
+            }
+        }
+
+        $pdf->Output($targetPdfPath, 'F');
+        return $targetPdfPath;
+    }
+}
+```
+
+6) Eloquent model za praćenje poslova (opcionalno ali korisno)
+database/migrations/xxxx_xx_xx_create_textract_jobs_table.php
+```
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration {
+    public function up(): void {
+        Schema::create('textract_jobs', function (Blueprint $t) {
+            $t->id();
+            $t->string('drive_file_id')->index();
+            $t->string('drive_file_name');
+            $t->string('s3_key')->nullable();
+            $t->string('job_id')->nullable()->index();
+            $t->string('status')->default('queued'); // queued|uploading|started|succeeded|failed
+            $t->text('error')->nullable();
+            $t->timestamps();
+        });
+    }
+    public function down(): void {
+        Schema::dropIfExists('textract_jobs');
+    }
+};
+```
+
+app/Models/TextractJob.php
+```
+<?php
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Model;
+
+class TextractJob extends Model
+{
+    protected $fillable = [
+        'drive_file_id', 'drive_file_name', 's3_key', 'job_id', 'status', 'error'
+    ];
+}
+```
+
+7) Poslovi u redu (Queues): preuzimanje, upload, start Textract, dohvat rezultata i rekonstrukcija
+app/Jobs/ProcessDrivePdfJob.php
+```
+<?php
+
+namespace App\Jobs;
+
+use App\Models\TextractJob;
+use App\Services\GoogleDriveService;
+use App\Services\TextractService;
+use App\Services\PdfReconstructor;
+use Illuminate\Bus\Queueable;
+use Illuminate\Contracts\Queue\ShouldQueue;
+use Illuminate\Foundation\Bus\Dispatchable;
+use Illuminate\Queue\InteractsWithQueue;
+use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Facades\Storage;
+
+class ProcessDrivePdfJob implements ShouldQueue
+{
+    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
+
+    public function __construct(public string $driveFileId, public string $driveFileName) {}
+
+    public function handle(GoogleDriveService $drive, TextractService $textract, PdfReconstructor $recon): void
+    {
+        $job = TextractJob::firstOrCreate(
+            ['drive_file_id' => $this->driveFileId],
+            ['drive_file_name' => $this->driveFileName, 'status' => 'queued']
+        );
+
+        $job->update(['status' => 'uploading']);
+
+        // 1) Preuzmi pdf lokalno
+        $localPath = $drive->downloadFile($this->driveFileId);
+
+        // 2) Uploadaj na S3
+        $inputPrefix = trim(env('S3_INPUT_PREFIX', 'textract/input'), '/');
+        $s3Key = $inputPrefix . '/' . $this->driveFileId . '.pdf';
+        $textract->uploadToS3($localPath, $s3Key);
+
+        $job->update(['s3_key' => $s3Key, 'status' => 'started']);
+
+        // 3) Start Textract job
+        $jobId = $textract->startDocumentTextDetection($s3Key, $this->driveFileName);
+        $job->update(['job_id' => $jobId]);
+
+        // 4) Poll dok ne završi
+        $blocks = $textract->waitAndFetchTextDetection($jobId);
+
+        // 5) Spremi raw JSON (opcionalno)
+        $jsonPrefix = trim(env('S3_JSON_PREFIX', 'textract/json'), '/');
+        Storage::disk('s3')->put($jsonPrefix . '/' . $this->driveFileId . '.json', json_encode($blocks, JSON_PRETTY_PRINT));
+
+        // 6) Grupiraj LINE-ove po stranici
+        $linesByPage = $textract->collectLinesByPage($blocks);
+
+        // 7) Rekonstruiraj searchable PDF
+        $outputPrefix = trim(env('S3_OUTPUT_PREFIX', 'textract/output'), '/');
+        $targetLocal = storage_path('app/tmp/' . $this->driveFileId . '-searchable.pdf');
+        $recon->buildSearchablePdf($localPath, $linesByPage, $targetLocal);
+
+        // 8) Uploadaj rezultat na S3
+        $outKey = $outputPrefix . '/' . $this->driveFileId . '-searchable.pdf';
+        Storage::disk('s3')->put($outKey, fopen($targetLocal, 'r'), ['visibility' => 'private']);
+
+        // 9) Očisti lokalne tmp fajlove
+        @unlink($localPath);
+        @unlink($targetLocal);
+
+        $job->update(['status' => 'succeeded']);
+    }
+
+    public function failed(\Throwable $e): void
+    {
+        TextractJob::where('drive_file_id', $this->driveFileId)->update([
+            'status' => 'failed',
+            'error' => $e->getMessage(),
+        ]);
+    }
+}
+```
+
+8) Artisan naredba za pokretanje obrade cijelog foldera
+app/Console/Commands/TextractProcessDriveFolder.php
+```
+<?php
+
+namespace App\Console\Commands;
+
+use Illuminate\Console\Command;
+use App\Services\GoogleDriveService;
+use App\Jobs\ProcessDrivePdfJob;
+
+class TextractProcessDriveFolder extends Command
+{
+    protected $signature = 'textract:process-drive-folder {folderId?} {--limit=0}';
+    protected $description = 'Dohvati PDF-ove iz Google Drive foldera i pošalji na Textract OCR + rekonstrukciju';
+
+    public function handle(GoogleDriveService $drive)
+    {
+        $folderId = $this->argument('folderId') ?: env('GOOGLE_DRIVE_FOLDER_ID');
+        if (!$folderId) {
+            $this->error('Folder ID nije zadan. Koristite argument ili .env GOOGLE_DRIVE_FOLDER_ID.');
+            return Command::FAILURE;
+        }
+
+        $limit = (int)$this->option('limit');
+        $files = $drive->listPdfsInFolder($folderId);
+
+        if (empty($files)) {
+            $this->info('Nema PDF-ova u folderu.');
+            return Command::SUCCESS;
+        }
+
+        $count = 0;
+        foreach ($files as $f) {
+            if ($limit > 0 && $count >= $limit) break;
+
+            ProcessDrivePdfJob::dispatch($f['id'], $f['name'])
+                ->onQueue('textract');
+            $this->info("Queued: {$f['name']} ({$f['id']})");
+            $count++;
+        }
+
+        $this->info("Ukupno stavljeno u red: {$count}");
+        return Command::SUCCESS;
+    }
+}
+```
+
+9) Queue konfiguracija i pokretanje
+- U .env postavite QUEUE_CONNECTION=database ili redis i pokrenite queue worker:
+  - php artisan queue:table && php artisan migrate
+  - php artisan queue:work --queue=textract
+- Pokrenite obradu foldera:
+  - php artisan textract:process-drive-folder
+  - ili s limitom za probu: php artisan textract:process-drive-folder YOUR_FOLDER_ID --limit=3
+
+10) Dozvole i sigurnost
+- Google Drive:
+  - U Google Cloud Console omogućite Drive API.
+  - Kreirajte Service Account i JSON ključ; folder na Driveu share-ajte s email adresom SA-a.
+  - Ako je Workspace i želite pristup korisničkim datotekama bez share-a, koristite domain-wide delegation + impersonaciju (GOOGLE_IMPERSONATE_USER).
+- AWS IAM policy za ulogu/korisnika:
+  - s3:GetObject, s3:PutObject, s3:AbortMultipartUpload, s3:ListBucket na vaš bucket/prefikse
+  - textract:StartDocumentTextDetection, textract:GetDocumentTextDetection
+  - (Ako budete koristili StartDocumentAnalysis/GetDocumentAnalysis, dodajte i te akcije.)
+
+11) Varijante i proširenja
+- Forms/Tables: Umjesto startDocumentTextDetection koristite startDocumentAnalysis s FeatureTypes => ['TABLES','FORMS'] ako želite naknadno crtati polja/tablice ili izvlačiti vrijednosti.
+- SNS/SQS notifikacije: Umjesto polling pristupa, Textract može slati status na SNS; povežite SNS na SQS i procesirajte “SUCCEEDED” event kroz job – to je skalabilnije za velike količine.
+- Skaliranje i ograničenja:
+  - Textract limit 5–20 concurrent asinkronih jobova ovisno o regiji/kontaktu s AWS supportom.
+  - PDF limit veličine do 500MB; broj stranica do 3000 (ovisno o servisu).
+- Kvaliteta prepoznavanja: Ako originalni PDF sadrži živ tekst (ne skenirani), Textract ga svejedno procesira; za takve dokumente moguće je preskočiti OCR (npr. pomoću pdfinfo/Poppler za detekciju tekstualnog sadržaja).
+- Vidljivost teksta: gore koristimo SetAlpha(0.0) kako tekst ne bi bio vidljiv; i dalje je selektibilan/pretraživ u većini preglednika. Ako želite provjeru tijekom razvoja, stavite 0.05–0.1 pa ćete vidjeti tanki overlay.
+- Točnost pozicioniranja: koristimo LINE blokove. Ako želite finiju granularnost, možete koristiti WORD blokove i slagati riječi točnije (uz potencijalno bolju selekciju teksta).
+- Memorija/IO: Za vrlo velike PDF-ove, razmislite o stream preuzimanju i multipart uploadu, te privremenom spremanju na disk s dovoljno prostora.
+
+12) Brzi integracijski test
+- Postavite .env vrijednosti (Drive folder share-an sa SA, S3 bucket exists, AWS kredencijali).
+- Kreirajte queue tablicu i migracije, pokrenite queue worker.
+- Pokrenite:
+  - php artisan textract:process-drive-folder --limit=1
+- Nakon završetka, provjerite S3:
+  - s3://your-bucket/textract/json/{drive_file_id}.json – raw Textract izlaz
+  - s3://your-bucket/textract/output/{drive_file_id}-searchable.pdf – rekonstruirani PDF
+
+Ako želite, mogu dodati:
+- HTTP endpoint koji pokreće obradu pojedinog Drive file ID-a i vraća presigned URL za gotov searchable PDF,
+- varijantu s Textract Forms/Tables i “highlightanjem” polja/tablica,
+- SQS/SNS event-driven pipeline bez pollinga.

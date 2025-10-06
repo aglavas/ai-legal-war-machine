@@ -2,23 +2,28 @@
 
 namespace App\Providers;
 
+use App\Services\OpenAIService;
 use Illuminate\Support\ServiceProvider;
+use Livewire\Livewire;
+use App\Http\Livewire\OpenAIVectorManager;
+use App\Http\Livewire\OpenAILogViewer;
+use App\Services\Odluke\OdlukeClient;
 
 class AppServiceProvider extends ServiceProvider
 {
-    /**
-     * Register any application services.
-     */
     public function register(): void
     {
-        //
+        $this->app->singleton(OpenAIService::class, function () {
+            return new OpenAIService();
+        });
+        $this->app->singleton(OdlukeClient::class, function () {
+            return OdlukeClient::fromConfig();
+        });
     }
 
-    /**
-     * Bootstrap any application services.
-     */
     public function boot(): void
     {
-        //
+        Livewire::component('openai-vector-manager', OpenAIVectorManager::class);
+        Livewire::component('openai-log-viewer', OpenAILogViewer::class);
     }
 }

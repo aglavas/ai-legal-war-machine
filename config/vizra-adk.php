@@ -84,7 +84,7 @@ return [
     /**
      * Provider-specific configurations.
      * Configure API keys and settings for each LLM provider.
-     * 
+     *
      * Note: Most providers are configured through Prism PHP's configuration.
      * Set these environment variables in your .env file:
      * - OPENAI_API_KEY
@@ -96,7 +96,7 @@ return [
      * - XAI_API_KEY
      * - VOYAGEAI_API_KEY
      * - OPENROUTER_API_KEY
-     * 
+     *
      * For OpenRouter:
      * - API Key: Get from https://openrouter.ai/settings
      * - Base URL: https://openrouter.ai/api/v1 (handled by Prism)
@@ -128,6 +128,14 @@ return [
         'agent_memories' => 'agent_memories',
         'agent_vector_memories' => 'agent_vector_memories',
         'agent_trace_spans' => 'agent_trace_spans',
+
+        // New app tables
+        'laws' => 'laws',
+        'law_uploads' => 'law_uploads',
+        'cases' => 'cases',
+        'cases_documents' => 'cases_documents',
+        'cases_documents_uploads' => 'cases_documents_uploads',
+        'ingested_laws' => 'ingested_laws',
     ],
 
     /**

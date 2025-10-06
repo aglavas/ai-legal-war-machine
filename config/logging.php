@@ -4,6 +4,7 @@ use Monolog\Handler\NullHandler;
 use Monolog\Handler\StreamHandler;
 use Monolog\Handler\SyslogUdpHandler;
 use Monolog\Processor\PsrLogMessageProcessor;
+use Monolog\Formatter\JsonFormatter;
 
 return [
 
@@ -125,6 +126,22 @@ return [
 
         'emergency' => [
             'path' => storage_path('logs/laravel.log'),
+        ],
+
+        // Custom OpenAI JSON log channel
+        'openai' => [
+            'driver' => 'monolog',
+            'level' => env('LOG_LEVEL', 'debug'),
+            'handler' => StreamHandler::class,
+            'handler_with' => [
+                'stream' => storage_path('logs/openai.log'),
+            ],
+            'formatter' => JsonFormatter::class,
+            'formatter_with' => [
+                // ensure each record is a single JSON line
+                'append_newline' => true,
+            ],
+            'processors' => [PsrLogMessageProcessor::class],
         ],
 
     ],
