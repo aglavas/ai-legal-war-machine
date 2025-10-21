@@ -9,8 +9,10 @@ use Illuminate\Support\Str;
 
 class LawVectorStoreService
 {
-    public function __construct(protected OpenAIService $openai)
-    {
+    public function __construct(
+        protected OpenAIService $openai,
+        protected ?GraphRagService $graphRag = null
+    ) {
     }
 
     /**
@@ -41,7 +43,8 @@ class LawVectorStoreService
         $table = (new Law())->getTable();
 
         $inserted = 0;
-        DB::transaction(function () use ($docs, $data, $docId, $dims, $model, $provider, $driver, $table, $baseMeta, $ingestedId, &$inserted) {
+        $insertedIds = [];
+        DB::transaction(function () use ($docs, $data, $docId, $dims, $model, $provider, $driver, $table, $baseMeta, $ingestedId, &$inserted, &$insertedIds) {
             $now = now();
             foreach ($docs as $i => $doc) {
                 $content = (string)$doc['content'];
@@ -57,8 +60,9 @@ class LawVectorStoreService
 
                 $rowMeta = (array)($doc['law_meta'] ?? []);
 
+                $lawId = (string) Str::ulid();
                 $payload = array_merge([
-                    'id' => (string) Str::ulid(),
+                    'id' => $lawId,
                     'doc_id' => $docId,
                     'ingested_law_id' => $ingestedId,
                     // content
@@ -84,8 +88,23 @@ class LawVectorStoreService
 
                 DB::table($table)->insert($payload);
                 $inserted++;
+                $insertedIds[] = $lawId;
             }
         });
+
+        // Sync to graph database if enabled
+        if ($this->graphRag && config('neo4j.sync.auto_sync', true) && config('neo4j.sync.enabled', true)) {
+            foreach ($insertedIds as $lawId) {
+                try {
+                    $this->graphRag->syncLaw($lawId);
+                } catch (\Exception $e) {
+                    Log::warning('Failed to sync law to graph database', [
+                        'law_id' => $lawId,
+                        'error' => $e->getMessage(),
+                    ]);
+                }
+            }
+        }
 
         return ['count' => count($docs), 'inserted' => $inserted, 'dimensions' => $dims, 'model' => $model];
     }

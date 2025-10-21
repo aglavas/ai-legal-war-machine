@@ -9,8 +9,10 @@ use Illuminate\Support\Str;
 
 class CaseVectorStoreService
 {
-    public function __construct(protected OpenAIService $openai)
-    {
+    public function __construct(
+        protected OpenAIService $openai,
+        protected ?GraphRagService $graphRag = null
+    ) {
     }
 
     /**
@@ -40,7 +42,8 @@ class CaseVectorStoreService
         $table = (new CaseDocument())->getTable();
 
         $inserted = 0;
-        DB::transaction(function () use ($docs, $data, $caseId, $docId, $dims, $model, $provider, $driver, $table, $uploadId, &$inserted) {
+        $insertedIds = [];
+        DB::transaction(function () use ($docs, $data, $caseId, $docId, $dims, $model, $provider, $driver, $table, $uploadId, &$inserted, &$insertedIds) {
             $now = now();
             foreach ($docs as $i => $doc) {
                 $content = (string)$doc['content'];
@@ -54,8 +57,9 @@ class CaseVectorStoreService
                     ->exists();
                 if ($exists) continue;
 
+                $caseDocId = (string) Str::ulid();
                 $payload = [
-                    'id' => (string) Str::ulid(),
+                    'id' => $caseDocId,
                     'case_id' => $caseId,
                     'doc_id' => $docId,
                     'upload_id' => $uploadId,
@@ -74,16 +78,32 @@ class CaseVectorStoreService
                     'updated_at' => $now,
                 ];
 
-                if ($driver === 'pgsql') {
-                    $payload['embedding'] = DB::raw($this->toPgVectorCastLiteral($vec));
-                } else {
-                    $payload['embedding_vector'] = json_encode($vec);
-                }
+                $payload['embedding'] = DB::raw($this->toPgVectorCastLiteral($vec));
+//                if ($driver === 'pgsql') {
+//
+//                } else {
+//                    $payload['embedding_vector'] = json_encode($vec);
+//                }
 
                 DB::table($table)->insert($payload);
                 $inserted++;
+                $insertedIds[] = $caseDocId;
             }
         });
+
+        // Sync to graph database if enabled
+        if ($this->graphRag && config('neo4j.sync.auto_sync', true) && config('neo4j.sync.enabled', true)) {
+            foreach ($insertedIds as $caseDocId) {
+                try {
+                    $this->graphRag->syncCase($caseDocId);
+                } catch (\Exception $e) {
+                    Log::warning('Failed to sync case to graph database', [
+                        'case_doc_id' => $caseDocId,
+                        'error' => $e->getMessage(),
+                    ]);
+                }
+            }
+        }
 
         return ['count' => count($docs), 'inserted' => $inserted, 'dimensions' => $dims, 'model' => $model];
     }
@@ -112,4 +132,3 @@ class CaseVectorStoreService
         return "'" . $this->toPgVectorLiteral($vec) . "'::vector";
     }
 }
-

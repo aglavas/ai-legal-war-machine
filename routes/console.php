@@ -62,6 +62,10 @@ Artisan::command('zakonhr:ingest-embeddings
     /** @var ZakonHrIngestService $svc */
     $svc = App::make(ZakonHrIngestService::class);
 
+    $agent = (string)($this->option('agent') ?? 'law');
+    $namespace = (string)($this->option('namespace') ?? 'zakonhr');
+    $model = $this->option('model') ?: null;
+
     $offline = (string) ($this->option('offline-html') ?? '');
     if ($offline !== '') {
         if (!is_file($offline)) {
@@ -70,9 +74,9 @@ Artisan::command('zakonhr:ingest-embeddings
         }
         $html = file_get_contents($offline);
         $opts = [
-            'agent' => (string)($this->option('agent') ?? 'law'),
-            'namespace' => (string)($this->option('namespace') ?? 'zakonhr'),
-            'model' => $this->option('model') ?: null,
+            'agent' => $agent,
+            'namespace' => $namespace,
+            'model' => $model,
             'chunk_chars' => (int)($this->option('chunk') ?? 1200),
             'overlap' => (int)($this->option('overlap') ?? 150),
             'title' => $this->option('title') ?: null,
@@ -81,7 +85,7 @@ Artisan::command('zakonhr:ingest-embeddings
         ];
         $res = $svc->ingestHtml($html, $opts, 'offline://zakonhr-sample');
         $this->info('ZakonHR (offline): Articles='.$res['articles_seen'].'; Inserted='.$res['inserted'].'; Would-chunks='.$res['would_chunks'].'; Errors='.$res['errors'].'; Dry='.(int)$res['dry']);
-        $this->line('Agent='.$res['agent'].' Namespace='.$res['namespace'].' Model='.$res['model']);
+        $this->line('Agent='.$agent.' Namespace='.$namespace.' Model='.($res['model'] ?? ($model ?? 'default')));
         return SymfonyCommand::SUCCESS;
     }
 
@@ -99,9 +103,9 @@ Artisan::command('zakonhr:ingest-embeddings
     }
 
     $opts = [
-        'agent' => (string)($this->option('agent') ?? 'law'),
-        'namespace' => (string)($this->option('namespace') ?? 'zakonhr'),
-        'model' => $this->option('model') ?: null,
+        'agent' => $agent,
+        'namespace' => $namespace,
+        'model' => $model,
         'chunk_chars' => (int)($this->option('chunk') ?? 1200),
         'overlap' => (int)($this->option('overlap') ?? 150),
         'title' => $this->option('title') ?: null,
@@ -110,9 +114,8 @@ Artisan::command('zakonhr:ingest-embeddings
     ];
 
     $res = $svc->ingestUrls($urls, $opts);
-    dd($res);
     $this->info('ZakonHR: URLs processed='.$res['urls_processed'].'; Articles seen='.$res['articles_seen'].'; Inserted='.$res['inserted'].'; Would-chunks='.$res['would_chunks'].'; Errors='.$res['errors'].'; Dry='.(int)$res['dry']);
-    $this->line('Agent='.$res['agent'].' Namespace='.$res['namespace'].' Model='.$res['model']);
+    $this->line('Agent='.$agent.' Namespace='.$namespace.' Model='.($res['model'] ?? ($model ?? 'default')));
     return SymfonyCommand::SUCCESS;
 })->purpose('Fetch ZakonHR pages, split into articles, embed and store.');
 
@@ -136,6 +139,10 @@ Artisan::command('odluke:ingest-embeddings
     /** @var OdlukeClient $client */
     $client = App::make(OdlukeClient::class);
 
+    $agent = (string)($this->option('agent') ?? 'odluke');
+    $namespace = (string)($this->option('namespace') ?? 'odluke');
+    $model = $this->option('model') ?: null;
+
     $offline = (string) ($this->option('offline-text') ?? '');
     if ($offline !== '') {
         if (!is_file($offline)) {
@@ -144,16 +151,16 @@ Artisan::command('odluke:ingest-embeddings
         }
         $text = file_get_contents($offline) ?: '';
         $opts = [
-            'agent' => (string)($this->option('agent') ?? 'odluke'),
-            'namespace' => (string)($this->option('namespace') ?? 'odluke'),
-            'model' => $this->option('model') ?: null,
+            'agent' => $agent,
+            'namespace' => $namespace,
+            'model' => $model,
             'chunk_chars' => (int)($this->option('chunk') ?? 1500),
             'overlap' => (int)($this->option('overlap') ?? 200),
             'dry' => (bool)$this->option('dry'),
         ];
         $res = $svc->ingestText($text, ['id' => 'offline-odluka'], $opts);
         $this->info('Odluke (offline): Inserted='.$res['inserted'].'; Would-chunks='.$res['would_chunks'].'; Skipped='.$res['skipped'].'; Errors='.$res['errors'].'; Dry='.(int)$res['dry']);
-        $this->line('Agent='.$res['agent'].' Namespace='.$res['namespace'].' Model='.$res['model']);
+        $this->line('Agent='.$agent.' Namespace='.$namespace.' Model='.($res['model'] ?? ($model ?? 'default')));
         return SymfonyCommand::SUCCESS;
     }
 
@@ -174,9 +181,9 @@ Artisan::command('odluke:ingest-embeddings
     }
 
     $opts = [
-        'agent' => (string)($this->option('agent') ?? 'odluke'),
-        'namespace' => (string)($this->option('namespace') ?? 'odluke'),
-        'model' => $this->option('model') ?: null,
+        'agent' => $agent,
+        'namespace' => $namespace,
+        'model' => $model,
         'chunk_chars' => (int)($this->option('chunk') ?? 1500),
         'overlap' => (int)($this->option('overlap') ?? 200),
         'prefer' => (string)($this->option('prefer') ?? 'auto'),
@@ -185,7 +192,7 @@ Artisan::command('odluke:ingest-embeddings
 
     $res = $svc->ingestByIds($ids, $opts);
     $this->info('Odluke: IDs processed='.$res['ids_processed'].'; Inserted='.$res['inserted'].'; Would-chunks='.$res['would_chunks'].'; Skipped='.$res['skipped'].'; Errors='.$res['errors'].'; Dry='.(int)$res['dry']);
-    $this->line('Agent='.$res['agent'].' Namespace='.$res['namespace'].' Model='.$res['model']);
+    $this->line('Agent='.$agent.' Namespace='.$namespace.' Model='.($res['model'] ?? ($model ?? 'default')));
     return SymfonyCommand::SUCCESS;
 })->purpose('Fetch Odluke decisions (HTML/PDF), extract text, embed and store.');
 

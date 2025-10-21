@@ -35,10 +35,10 @@ class ZakonHrIngestService
             try {
                 $html = Http::retry(2, 250)->get($url)->throw()->body();
                 $title = $options['title'] ?? $this->extractTitle($html) ?? 'Zakon (zakon.hr)';
+                $pubDate = $options['date'] ?? ($this->extractPublishedDate($html) ?? null);
                 $title = Str::replace(" -  Zakon.hr - ", '-', $title);
                 $slug = Str::slug($title);
                 $title = Str::snake($title);
-                $pubDate = $options['date'] ?? null; // YYYY-MM-DD if provided
                 $dateDir = ($pubDate ?: date('Y-m-d'));
                 $baseDir = 'hr-laws/zakonhr/'.$slug.'/'.$dateDir;
                 Storage::put($baseDir.'/source.html', $html);
@@ -161,7 +161,7 @@ class ZakonHrIngestService
         $title = Str::replace(" -  Zakon.hr", '', $title);
         $slug = Str::slug($title);
         $titleSnake = Str::snake($title);
-        $datePub = $options['date'] ?? null;
+        $datePub = $options['date'] ?? ($this->extractPublishedDate($html) ?? null);
         $dateDir = ($datePub ?: date('Y-m-d'));
         $baseDir = 'hr-laws/zakonhr/'.$slug.'/'.$dateDir;
         Storage::put($baseDir.'/source.html', $html);
@@ -272,6 +272,15 @@ class ZakonHrIngestService
         // Light cleanup of common noise patterns
         $text = preg_replace('/Copyright\s+©?\s+[^ ]+/', '', $text);
         return trim($text);
+    }
+
+    protected function extractPublishedDate(string $html): ?string
+    {
+        if (preg_match('/na\h+snazi\h+od\h*:?\h*(?:<[^>]>\h)*((?:0?[1-9]|[12]\d|3[01]).(?:0?[1-9]|1[0-2]).\d{4}).?/iu', $html, $m)) {
+            return trim(html_entity_decode(strip_tags($m[1]), ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+        }
+
+        return null;
     }
 
     protected function extractTitle(string $html): ?string

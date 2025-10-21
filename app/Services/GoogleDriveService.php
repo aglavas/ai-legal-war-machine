@@ -4,6 +4,8 @@ namespace App\Services;
 
 use Google\Client as GoogleClient;
 use Google\Service\Drive;
+use Google\Service\Exception;
+use GuzzleHttp\Exception\GuzzleException;
 
 class GoogleDriveService
 {
@@ -28,16 +30,16 @@ class GoogleDriveService
     /**
      * Return list of PDFs in a folder.
      * @return array<int, array{id:string,name:string,mimeType:string,size:int}>
+     * @throws Exception
      */
     public function listPdfsInFolder(string $folderId, int $pageSize = 100): array
     {
         $files = [];
         $pageToken = null;
-        $q = sprintf("'%s' in parents and mimeType='application/pdf' and trashed=false", $folderId);
 
         do {
             $response = $this->drive->files->listFiles([
-                'q' => $q,
+                'q' => sprintf("'%s' in parents and mimeType='application/pdf' and trashed=false", $folderId),
                 'pageSize' => $pageSize,
                 'supportsAllDrives' => true,
                 'includeItemsFromAllDrives' => true,
@@ -60,19 +62,23 @@ class GoogleDriveService
     }
 
     /**
-     * Download a Drive file to a local temp path.
+     * Download a Drive file to a local path using authorized HTTP client.
      * @return string absolute local path
+     * @throws GuzzleException
      */
     public function downloadFile(string $fileId, ?string $targetPath = null): string
     {
-        $targetPath ??= storage_path('app/tmp/' . $fileId . '.pdf');
+        $targetPath ??= storage_path('app/textract/source/' . $fileId . '.pdf');
         @mkdir(dirname($targetPath), 0775, true);
 
-        $response = $this->drive->files->get($fileId, ['alt' => 'media']);
-        $content = $response->getBody()->getContents();
-        file_put_contents($targetPath, $content);
+        // Use authorized HTTP client to download media content
+        $client = $this->drive->getClient();
+        $http = $client->authorize();
+        $url = sprintf('https://www.googleapis.com/drive/v3/files/%s?alt=media', urlencode($fileId));
+        $resp = $http->request('GET', $url, ['stream' => true]);
+        $content = (string) $resp->getBody();
 
+        file_put_contents($targetPath, $content);
         return $targetPath;
     }
 }
-

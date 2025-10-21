@@ -1,0 +1,1517 @@
+README.md
+
+2023-09-11
+
+e-Oglasna API
+Ispod vršne adrese API-a e-Oglasne https://e-oglasna.pravosudje.hr/api/v1/* nalaze se servisi koji
+prihvaćaju pozive iz vanjskih sustava i vraćaju podatke o oglasima objavljenima na oglasnoj ploči
+
+Dokumentacija za API krajnje točke
+Svi URL-ovi su relativni prema: https://e-oglasna.pravosudje.hr
+HTTP zahtjev
+GET /api/v1/notice
+GET /api/v1/notice/{uuid}
+
+Opis
+Dohvaća sve oglase, rezultati pretrage odgovaraju rezultatima pretrage
+na stranici https://e-oglasna.pravosudje.hr/objave
+Dohvaća oglas po UUID-u
+Dohvaća oglase sa suda, rezultati pretrage odgovaraju rezultatima
+
+GET /api/v1/court-notice
+
+pretrage na stranici https://e-oglasna.pravosudje.hr/objavesudova
+
+GET /api/v1/court-
+
+Dohvaća oglas po UUID-u, detalji oglasa sadrže i atribute specifične za
+
+notice/{uuid}
+
+oglas sa suda
+
+GET /api/v1/courtnotice/legal-personbankruptcy
+GET /api/v1/courtnotice/legal-personbankruptcy/{uuid}
+GET /api/v1/courtnotice/natural-personbankruptcy
+GET /api/v1/courtnotice/natural-personbankruptcy/{uuid}
+GET /api/v1/institutionnotice
+
+Dohvaća oglase sa suda, rezultati pretrage odgovaraju rezultatima
+pretrage na stranici https://e-oglasna.pravosudje.hr/stecajevi
+
+Dohvaća oglas po UUID-u, detalji oglasa sadrže i atribute specifične za
+oglas sa suda
+
+Dohvaća oglase, rezultati pretrage odgovaraju rezultatima pretrage na
+stranici https://e-oglasna.pravosudje.hr/stecajevi-potrosaca
+
+Dohvaća oglas po UUID-u, detalji oglasa sadrže i atribute specifične za
+oglas sa suda
+
+Dohvaća oglase institucija (FINA)
+
+GET /api/v1/institution-
+
+Dohvaća oglas po UUID-u, detalji oglasa sadrže i atribute specifične za
+
+notice/{uuid}
+
+institucije
+
+GET /api/v1/court/all
+
+Dohvaća šifrarnik sudova. Šifre sudova mogu se koristiti se kao
+parametri pretrage oglasa
+Dohvaća popis izvezenih datoteka. Dohvaćeni podaci odgovaraju
+
+GET /api/v1/export/list
+
+onima na stranici https://eoglasna.pravosudje.hr/dokumenti/arhiva-objava
+1 / 26
+
+README.md
+
+2023-09-11
+
+Rate limiting
+API ima rate limiting (https://en.wikipedia.org/wiki/Rate_limiting) i koristi token bucket algoritam
+(https://en.wikipedia.org/wiki/Token_bucket) u implementaciji rate limiting pravila.
+Pravila kod pozivanja metoda servisa:
+Maksimalno 1000 poziva u periodu od 1 sata
+Maksimalno 5 poziva unutar vremenskog prozora od 5 sekundi
+U slučaju da je dosegnut limit u pozivanju servisa, servis odgovara HTTP statusom 429 - TOO MANY
+REQUESTS, a u HTTP headeru X-Rate-Limit-Retry-After-Milliseconds nalazi se podatak o vremenu koje
+treba proteći prije slijedećeg prihvaćanja novog HTTP zahtjeva.
+
+Kategorije
+Za pojedine korisnike uvedene su kategorije Rate limiting postavki. Ti korisnici određeni su fiksnim IP
+adresama
+Kategorija
+ADVANCED
+
+Postavke
+maksimalno 5000 poziva na sat, maksimalno 15 poziva unutar vremenskog prozora od 5
+sekundi
+
+Primjeri
+Pretraga oglasa
+
+curl 'https://e-oglasna.pravosudje.hr/api/v1/notice?text=abc'
+
+Dohvat šifrarnika sudova
+Dohvat šifrarnika sudova pozivom servisa korištenjem naredbe curl:
+
+curl 'https://e-oglasna.pravosudje.hr/api/v1/court/all'
+
+Generiranje Markdown dokumentacije iz YAML datoteke
+
+docker run --rm -v $(pwd):/local openapitools/openapi-generator-cli generate -i
+/local/e-oglasna_API_v1.yaml -g markdown -o /local
+
+OpenAPI programske definicije i scheme podataka
+OpenAPI programske definicije i scheme podataka dane su u datoteci u YAML formatu:
+
+2 / 26
+
+README.md
+
+2023-09-11
+
+openapi: 3.0.1
+info:
+title: e-Oglasna API
+description: API za dohvat podataka o oglasima s e-Oglasne ploče
+version: v1
+servers:
+- url: https://e-oglasna.pravosudje.hr
+tags:
+- name: Institution notice
+description: API za oglase institucija - FINA
+- name: Court
+description: API za dohvat sudova
+- name: Court notice
+description: API za oglase sudova
+- name: Court notice - legal person bankruptcy
+description: API za oglase sudova - stečajni oglasi
+- name: Court notice - natural person bankruptcy
+description: API za oglase sudova - oglasi stečaja potrošača
+- name: Export
+description: API za dohvat izvezenih datoteka
+- name: Notice
+description: API za sve oglase
+paths:
+/api/v1/notice:
+get:
+tags:
+- Notice
+summary: Dohvaća oglase
+description: Dohvaća oglase koji odgovaraju kriterijima pretrage
+operationId: find
+parameters:
+- name: filter
+in: query
+description: Filter pretrage oglasa
+required: true
+schema:
+$ref: '#/components/schemas/NoticeSearchFilter'
+- name: page
+in: query
+description: Broj stranice (0..N)
+schema:
+type: integer
+default: 0
+- name: sort
+in: query
+description: 'Kriterij sortiranja u formatu:
+kriterijSortiranja(,asc|desc).
+Zadano sortiranje je ''datePublished,desc''. '
+schema:
+type: array
+items:
+type: string
+enum:
+3 / 26
+
+README.md
+
+2023-09-11
+
+- datePublished
+- expirationDate
+responses:
+default:
+description: default response
+content:
+application/json:
+schema:
+$ref: '#/components/schemas/Page'
+429:
+description: Previše upućenih zahtjeva
+500:
+description: Sistemska greška
+content:
+application/json:
+schema:
+$ref: '#/components/schemas/Error'
+404:
+description: Nije pronađen
+content:
+application/json:
+schema:
+$ref: '#/components/schemas/Error'
+400:
+description: Neispravan zahtjev
+content:
+application/json:
+schema:
+$ref: '#/components/schemas/Error'
+200:
+description: OK
+content:
+application/json:
+schema:
+$ref: '#/components/schemas/PageNotice'
+/api/v1/notice/{uuid}:
+get:
+tags:
+- Notice
+summary: Dohvaća oglas po UUID-u
+description: Dohvaća pojedini oglas po UUID-u
+operationId: findById
+parameters:
+- name: uuid
+in: path
+description: Jedinstveni identifikator oglasa
+required: true
+schema:
+type: string
+format: uuid
+responses:
+429:
+description: Previše upućenih zahtjeva
+500:
+4 / 26
+
+README.md
+
+2023-09-11
+
+description: Sistemska greška
+content:
+application/json:
+schema:
+$ref: '#/components/schemas/Error'
+404:
+description: Nije pronađen
+content:
+application/json:
+schema:
+$ref: '#/components/schemas/Error'
+400:
+description: Neispravan zahtjev
+content:
+application/json:
+schema:
+$ref: '#/components/schemas/Error'
+200:
+description: OK
+content:
+application/json:
+schema:
+$ref: '#/components/schemas/Notice'
+/api/v1/institution-notice:
+get:
+tags:
+- Institution notice
+summary: Dohvaća oglase
+description: Dohvaća oglase koji odgovaraju kriterijima pretrage
+operationId: find_1
+parameters:
+- name: filter
+in: query
+description: Filter pretrage oglasa
+required: true
+schema:
+$ref: '#/components/schemas/InstitutionNoticeSearchFilter'
+- name: page
+in: query
+description: Broj stranice (0..N)
+schema:
+type: integer
+default: 0
+- name: sort
+in: query
+description: 'Kriterij sortiranja u formatu:
+kriterijSortiranja(,asc|desc).
+Zadano sortiranje je ''datePublished,desc''. '
+schema:
+type: array
+items:
+type: string
+enum:
+- datePublished
+5 / 26
+
+README.md
+
+2023-09-11
+
+- expirationDate
+responses:
+default:
+description: default response
+content:
+application/json:
+schema:
+$ref: '#/components/schemas/Page'
+429:
+description: Previše upućenih zahtjeva
+500:
+description: Sistemska greška
+content:
+application/json:
+schema:
+$ref: '#/components/schemas/Error'
+404:
+description: Nije pronađen
+content:
+application/json:
+schema:
+$ref: '#/components/schemas/Error'
+400:
+description: Neispravan zahtjev
+content:
+application/json:
+schema:
+$ref: '#/components/schemas/Error'
+200:
+description: OK
+content:
+application/json:
+schema:
+$ref: '#/components/schemas/PageInstitutionNotice'
+/api/v1/institution-notice/{uuid}:
+get:
+tags:
+- Institution notice
+summary: Dohvaća oglas po UUID-u
+description: Dohvaća pojedini oglas po UUID-u
+operationId: findById_1
+parameters:
+- name: uuid
+in: path
+description: Jedinstveni identifikator oglasa
+required: true
+schema:
+type: string
+format: uuid
+responses:
+429:
+description: Previše upućenih zahtjeva
+500:
+description: Sistemska greška
+6 / 26
+
+README.md
+
+2023-09-11
+
+content:
+application/json:
+schema:
+$ref: '#/components/schemas/Error'
+404:
+description: Nije pronađen
+content:
+application/json:
+schema:
+$ref: '#/components/schemas/Error'
+400:
+description: Neispravan zahtjev
+content:
+application/json:
+schema:
+$ref: '#/components/schemas/Error'
+200:
+description: OK
+content:
+application/json:
+schema:
+$ref: '#/components/schemas/Notice'
+/api/v1/export/list:
+get:
+tags:
+- Export
+summary: Dohvaća izvezene datoteke
+description: Dohvaća popis izvezenih datoteka; arhive objavljenih oglasa
+zadnjih
+8 dana u XLSX formatu, arhive stečajeva objavljenih na dan zadnjih 8 dana
+u XLSX formatu, arhive stečajeva potrošača otvorenih na dan zadnjih 8 dana
+u XLSX formatu
+operationId: list
+responses:
+429:
+description: Previše upućenih zahtjeva
+500:
+description: Sistemska greška
+content:
+application/json:
+schema:
+$ref: '#/components/schemas/Error'
+404:
+description: Nije pronađen
+content:
+application/json:
+schema:
+$ref: '#/components/schemas/Error'
+400:
+description: Neispravan zahtjev
+content:
+application/json:
+schema:
+$ref: '#/components/schemas/Error'
+7 / 26
+
+README.md
+
+2023-09-11
+
+200:
+description: OK
+content:
+application/json:
+schema:
+$ref: '#/components/schemas/ExportList'
+/api/v1/court/all:
+get:
+tags:
+- Court
+summary: Dohvaća sudove
+description: Dohvaća popis svih sudova
+operationId: findAll
+responses:
+429:
+description: Previše upućenih zahtjeva
+500:
+description: Sistemska greška
+content:
+application/json:
+schema:
+$ref: '#/components/schemas/Error'
+404:
+description: Nije pronađen
+content:
+application/json:
+schema:
+$ref: '#/components/schemas/Error'
+400:
+description: Neispravan zahtjev
+content:
+application/json:
+schema:
+$ref: '#/components/schemas/Error'
+200:
+description: OK
+content:
+application/json:
+schema:
+type: array
+items:
+$ref: '#/components/schemas/Court'
+/api/v1/court-notice:
+get:
+tags:
+- Court notice
+summary: Dohvaća oglase
+description: Dohvaća oglase koji odgovaraju kriterijima pretrage
+operationId: find_2
+parameters:
+- name: filter
+in: query
+description: Filter pretrage oglasa
+required: true
+8 / 26
+
+README.md
+
+2023-09-11
+
+schema:
+$ref: '#/components/schemas/CourtNoticeSearchFilter'
+- name: page
+in: query
+description: Broj stranice (0..N)
+schema:
+type: integer
+default: 0
+- name: sort
+in: query
+description: 'Kriterij sortiranja u formatu:
+kriterijSortiranja(,asc|desc).
+Zadano sortiranje je ''datePublished,desc''. '
+schema:
+type: array
+items:
+type: string
+enum:
+- datePublished
+- expirationDate
+responses:
+default:
+description: default response
+content:
+application/json:
+schema:
+$ref: '#/components/schemas/Page'
+429:
+description: Previše upućenih zahtjeva
+500:
+description: Sistemska greška
+content:
+application/json:
+schema:
+$ref: '#/components/schemas/Error'
+404:
+description: Nije pronađen
+content:
+application/json:
+schema:
+$ref: '#/components/schemas/Error'
+400:
+description: Neispravan zahtjev
+content:
+application/json:
+schema:
+$ref: '#/components/schemas/Error'
+200:
+description: OK
+content:
+application/json:
+schema:
+$ref: '#/components/schemas/PageCourtNotice'
+/api/v1/court-notice/{uuid}:
+9 / 26
+
+README.md
+
+2023-09-11
+
+get:
+tags:
+- Court notice
+summary: Dohvaća oglas po UUID-u
+description: Dohvaća pojedini oglas po UUID-u
+operationId: findById_2
+parameters:
+- name: uuid
+in: path
+description: Jedinstveni identifikator oglasa
+required: true
+schema:
+type: string
+format: uuid
+responses:
+429:
+description: Previše upućenih zahtjeva
+500:
+description: Sistemska greška
+content:
+application/json:
+schema:
+$ref: '#/components/schemas/Error'
+404:
+description: Nije pronađen
+content:
+application/json:
+schema:
+$ref: '#/components/schemas/Error'
+400:
+description: Neispravan zahtjev
+content:
+application/json:
+schema:
+$ref: '#/components/schemas/Error'
+200:
+description: OK
+content:
+application/json:
+schema:
+$ref: '#/components/schemas/Notice'
+/api/v1/court-notice/natural-person-bankruptcy:
+get:
+tags:
+- Court notice - natural person bankruptcy
+summary: Dohvaća oglase
+description: Dohvaća oglase koji odgovaraju kriterijima pretrage
+operationId: find_3
+parameters:
+- name: filter
+in: query
+description: Filter pretrage oglasa
+required: true
+schema:
+10 / 26
+
+README.md
+
+2023-09-11
+
+$ref: '#/components/schemas/CourtNoticeSearchFilter'
+- name: page
+in: query
+description: Broj stranice (0..N)
+schema:
+type: integer
+default: 0
+- name: sort
+in: query
+description: 'Kriterij sortiranja u formatu:
+kriterijSortiranja(,asc|desc).
+Zadano sortiranje je ''datePublished,desc''. '
+schema:
+type: array
+items:
+type: string
+enum:
+- datePublished
+- expirationDate
+responses:
+default:
+description: default response
+content:
+application/json:
+schema:
+$ref: '#/components/schemas/Page'
+429:
+description: Previše upućenih zahtjeva
+500:
+description: Sistemska greška
+content:
+application/json:
+schema:
+$ref: '#/components/schemas/Error'
+404:
+description: Nije pronađen
+content:
+application/json:
+schema:
+$ref: '#/components/schemas/Error'
+400:
+description: Neispravan zahtjev
+content:
+application/json:
+schema:
+$ref: '#/components/schemas/Error'
+200:
+description: OK
+content:
+application/json:
+schema:
+$ref: '#/components/schemas/PageCourtNotice'
+/api/v1/court-notice/natural-person-bankruptcy/{uuid}:
+get:
+11 / 26
+
+README.md
+
+2023-09-11
+
+tags:
+- Court notice - natural person bankruptcy
+summary: Dohvaća oglas po UUID-u
+description: Dohvaća pojedini oglas po UUID-u
+operationId: findById_3
+parameters:
+- name: uuid
+in: path
+description: Jedinstveni identifikator oglasa
+required: true
+schema:
+type: string
+format: uuid
+responses:
+429:
+description: Previše upućenih zahtjeva
+500:
+description: Sistemska greška
+content:
+application/json:
+schema:
+$ref: '#/components/schemas/Error'
+404:
+description: Nije pronađen
+content:
+application/json:
+schema:
+$ref: '#/components/schemas/Error'
+400:
+description: Neispravan zahtjev
+content:
+application/json:
+schema:
+$ref: '#/components/schemas/Error'
+200:
+description: OK
+content:
+application/json:
+schema:
+$ref: '#/components/schemas/Notice'
+/api/v1/court-notice/legal-person-bankruptcy:
+get:
+tags:
+- Court notice - legal person bankruptcy
+summary: Dohvaća oglase
+description: Dohvaća oglase koji odgovaraju kriterijima pretrage
+operationId: find_4
+parameters:
+- name: filter
+in: query
+description: Filter pretrage oglasa
+required: true
+schema:
+$ref: '#/components/schemas/CourtNoticeSearchFilter'
+12 / 26
+
+README.md
+
+2023-09-11
+
+- name: page
+in: query
+description: Broj stranice (0..N)
+schema:
+type: integer
+default: 0
+- name: sort
+in: query
+description: 'Kriterij sortiranja u formatu:
+kriterijSortiranja(,asc|desc).
+Zadano sortiranje je ''datePublished,desc''. '
+schema:
+type: array
+items:
+type: string
+enum:
+- datePublished
+- expirationDate
+responses:
+default:
+description: default response
+content:
+application/json:
+schema:
+$ref: '#/components/schemas/Page'
+429:
+description: Previše upućenih zahtjeva
+500:
+description: Sistemska greška
+content:
+application/json:
+schema:
+$ref: '#/components/schemas/Error'
+404:
+description: Nije pronađen
+content:
+application/json:
+schema:
+$ref: '#/components/schemas/Error'
+400:
+description: Neispravan zahtjev
+content:
+application/json:
+schema:
+$ref: '#/components/schemas/Error'
+200:
+description: OK
+content:
+application/json:
+schema:
+$ref: '#/components/schemas/PageCourtNotice'
+/api/v1/court-notice/legal-person-bankruptcy/{uuid}:
+get:
+tags:
+13 / 26
+
+README.md
+
+2023-09-11
+
+- Court notice - legal person bankruptcy
+summary: Dohvaća oglas po UUID-u
+description: Dohvaća pojedini oglas po UUID-u
+operationId: findById_4
+parameters:
+- name: uuid
+in: path
+description: Jedinstveni identifikator oglasa
+required: true
+schema:
+type: string
+format: uuid
+responses:
+429:
+description: Previše upućenih zahtjeva
+500:
+description: Sistemska greška
+content:
+application/json:
+schema:
+$ref: '#/components/schemas/Error'
+404:
+description: Nije pronađen
+content:
+application/json:
+schema:
+$ref: '#/components/schemas/Error'
+400:
+description: Neispravan zahtjev
+content:
+application/json:
+schema:
+$ref: '#/components/schemas/Error'
+200:
+description: OK
+content:
+application/json:
+schema:
+$ref: '#/components/schemas/Notice'
+components:
+schemas:
+Page:
+type: object
+properties:
+totalElements:
+type: integer
+format: int64
+totalPages:
+type: integer
+format: int32
+size:
+type: integer
+format: int32
+content:
+14 / 26
+
+README.md
+
+2023-09-11
+
+type: array
+items:
+type: object
+number:
+type: integer
+format: int32
+sort:
+$ref: '#/components/schemas/Sort'
+numberOfElements:
+type: integer
+format: int32
+first:
+type: boolean
+pageable:
+$ref: '#/components/schemas/Pageable'
+last:
+type: boolean
+empty:
+type: boolean
+Pageable:
+type: object
+properties:
+offset:
+type: integer
+format: int64
+sort:
+$ref: '#/components/schemas/Sort'
+paged:
+type: boolean
+pageSize:
+type: integer
+format: int32
+pageNumber:
+type: integer
+format: int32
+unpaged:
+type: boolean
+Sort:
+type: object
+properties:
+unsorted:
+type: boolean
+sorted:
+type: boolean
+empty:
+type: boolean
+NoticeSearchFilter:
+type: object
+properties:
+text:
+type: string
+description: Tekstualni pojam za pretraživanje - oznaka spisa, naslov
+objave,
+subjekt na kojeg se objava odnosi ili OIB
+15 / 26
+
+README.md
+
+2023-09-11
+
+datePublishedFrom:
+type: string
+description: Datum objave od
+format: date
+datePublishedTo:
+type: string
+description: Datum objave do
+format: date
+noticeSourceType:
+uniqueItems: true
+type: array
+description: Izvori oglasa
+items:
+type: string
+description: Izvori oglasa
+enum:
+- COURT
+- INSTITUTION
+- NOTARY_PUBLIC
+description: Filter pretrage oglasa
+Error:
+type: object
+properties:
+message:
+type: string
+description: Poruka greške
+code:
+type: string
+description: Kôd greške
+enum:
+- SYSTEM_ERROR
+- UNAUTHORIZED
+- INSUFFICIENT_PERMISSION
+- FORBIDDEN
+- METHOD_NOT_ALLOWED
+- EXPECTATION_FAILED
+- BAD_REQUEST
+- NOT_FOUND
+- DATA_ENTITY_INVALID
+- DATA_ENTITY_NOT_FOUND
+- DATA_ENTITY_FIELD_NOT_UNIQUE
+- DATA_ENTITY_FIELD_REQUIRED
+- DATA_ENTITY_FIELD_INVALID
+- DATA_ENTITY_CONTENT_NOT_ALLOWED
+uniqueId:
+type: string
+description: Identifikator greške
+description: Greška
+Notice:
+type: object
+properties:
+uuid:
+type: string
+description: Jedinstveni identifikator oglasa
+16 / 26
+
+README.md
+
+2023-09-11
+
+publicUrl:
+type: string
+description: URL oglasa
+noticeDocumentsDownloadUrl:
+type: string
+description: URL za preuzimanje dokumenata objave
+noticeType:
+type: string
+description: Tip oglasa
+enum:
+- NOTICE
+- REPORT_NOTICE
+- INSTITUTION_NOTICE
+- COURT_NOTICE
+title:
+type: string
+description: Naslov oglasa
+expirationDate:
+type: string
+description: Poslijednji datum objave (datum isteka oglasa)
+format: date
+noticeDocuments:
+uniqueItems: true
+type: array
+description: Dokumenti
+items:
+$ref: '#/components/schemas/NoticeDocument'
+participants:
+uniqueItems: true
+type: array
+description: Sudionici
+items:
+$ref: '#/components/schemas/Participant'
+datePublished:
+type: string
+description: Datum i vrijeme objave
+format: date-time
+noticeSourceType:
+type: string
+description: Izvor oglasa
+enum:
+- COURT
+- INSTITUTION
+- NOTARY_PUBLIC
+description: Oglas
+NoticeDocument:
+type: object
+properties:
+uuid:
+type: string
+description: Jedinstveni identifikator dokumenta oglasa
+fileName:
+type: string
+description: Naziv datoteke
+17 / 26
+
+README.md
+
+2023-09-11
+
+ordinal:
+type: integer
+description: Redni broj dokumenta u oglasu
+format: int32
+downloadUrl:
+type: string
+description: URL za preuzimanje
+vrstaOdlukeId:
+type: integer
+description: identifikator vrste odluke u eSpis sustavu
+format: int64
+vrstaOdlukeNaziv:
+type: string
+description: naziv vrste odluke u eSpis sustavu
+vrstaPodneskaId:
+type: integer
+description: identifikator vrste podneska u eSpis sustavu
+format: int64
+vrstaPodneskaNaziv:
+type: string
+description: naziv vrste podneska u eSpis sustavu
+description: Dokument oglasa
+PageNotice:
+type: object
+properties:
+totalElements:
+type: integer
+format: int64
+totalPages:
+type: integer
+format: int32
+size:
+type: integer
+format: int32
+content:
+type: array
+items:
+$ref: '#/components/schemas/Notice'
+number:
+type: integer
+format: int32
+sort:
+$ref: '#/components/schemas/Sort'
+numberOfElements:
+type: integer
+format: int32
+first:
+type: boolean
+pageable:
+$ref: '#/components/schemas/Pageable'
+last:
+type: boolean
+empty:
+type: boolean
+18 / 26
+
+README.md
+
+2023-09-11
+
+Participant:
+type: object
+properties:
+participantType:
+type: string
+description: Tip sudionika
+enum:
+- PARTICIPANT
+- LEGAL_ENTITY
+- NATURAL_PERSON
+- LEGAL_PERSON
+- NON_LEGAL_ENTITY
+titles:
+type: string
+description: Opis sudionika
+debtor:
+type: boolean
+description: Sudionik, stranka u postupku
+InstitutionNoticeSearchFilter:
+type: object
+properties:
+text:
+type: string
+description: Tekstualni pojam za pretraživanje - oznaka spisa, naslov
+objave,
+subjekt na kojeg se objava odnosi ili OIB
+datePublishedFrom:
+type: string
+description: Datum objave od
+format: date
+datePublishedTo:
+type: string
+description: Datum objave do
+format: date
+noticeSourceType:
+uniqueItems: true
+type: array
+description: Izvori oglasa
+items:
+type: string
+description: Izvori oglasa
+enum:
+- COURT
+- INSTITUTION
+- NOTARY_PUBLIC
+institutionNoticeType:
+uniqueItems: true
+type: array
+description: Tipovi oglasa institucije
+items:
+type: string
+description: Tipovi oglasa institucije
+enum:
+- CALL_FOR_ADDRESS_SUBMISSION
+19 / 26
+
+README.md
+
+2023-09-11
+
+- OTHER
+description: Filter pretrage oglasa institucije
+Institution:
+type: object
+properties:
+name:
+type: string
+description: Naziv
+description: Institucija
+InstitutionNotice:
+type: object
+properties:
+uuid:
+type: string
+description: Jedinstveni identifikator oglasa
+publicUrl:
+type: string
+description: URL oglasa
+noticeDocumentsDownloadUrl:
+type: string
+description: URL za preuzimanje dokumenata objave
+noticeType:
+type: string
+description: Tip oglasa
+enum:
+- NOTICE
+- REPORT_NOTICE
+- INSTITUTION_NOTICE
+- COURT_NOTICE
+title:
+type: string
+description: Naslov oglasa
+expirationDate:
+type: string
+description: Poslijednji datum objave (datum isteka oglasa)
+format: date
+noticeDocuments:
+uniqueItems: true
+type: array
+description: Dokumenti
+items:
+$ref: '#/components/schemas/NoticeDocument'
+participants:
+uniqueItems: true
+type: array
+description: Sudionici
+items:
+$ref: '#/components/schemas/Participant'
+datePublished:
+type: string
+description: Datum i vrijeme objave
+format: date-time
+noticeSourceType:
+type: string
+20 / 26
+
+README.md
+
+2023-09-11
+
+description: Izvor oglasa
+enum:
+- COURT
+- INSTITUTION
+- NOTARY_PUBLIC
+institution:
+$ref: '#/components/schemas/Institution'
+institutionNoticeType:
+type: string
+description: Tip oglasa institucije
+enum:
+- CALL_FOR_ADDRESS_SUBMISSION
+- OTHER
+description: Oglas institucije
+PageInstitutionNotice:
+type: object
+properties:
+totalElements:
+type: integer
+format: int64
+totalPages:
+type: integer
+format: int32
+size:
+type: integer
+format: int32
+content:
+type: array
+items:
+$ref: '#/components/schemas/InstitutionNotice'
+number:
+type: integer
+format: int32
+sort:
+$ref: '#/components/schemas/Sort'
+numberOfElements:
+type: integer
+format: int32
+first:
+type: boolean
+pageable:
+$ref: '#/components/schemas/Pageable'
+last:
+type: boolean
+empty:
+type: boolean
+ExportList:
+type: object
+properties:
+notice:
+type: array
+description: Arhive objavljenih oglasa
+items:
+$ref: '#/components/schemas/WebResource'
+21 / 26
+
+README.md
+
+2023-09-11
+
+legalPersonBankruptcyOnDay:
+type: array
+description: Arhive stečajeva objavljenih na dan
+items:
+$ref: '#/components/schemas/WebResource'
+naturalPersonBankruptcyOnDay:
+type: array
+description: Arhive stečajeva potrošača otvorenih na dan
+items:
+$ref: '#/components/schemas/WebResource'
+description: Omotnica za liste izvezenih datoteka
+WebResource:
+type: object
+properties:
+fileName:
+type: string
+description: Naziv datoteke
+downloadUrl:
+type: string
+description: URL za preuzimanje
+description: Web resurs
+Court:
+type: object
+properties:
+name:
+type: string
+description: Naziv
+courtType:
+type: string
+description: Tip suda
+enum:
+- MUNICIPAL_COURT
+- COUNTY_COURT
+- SUPREME_COURT
+- COMMERCIAL_COURT
+- HIGH_COMMERCIAL_COURT
+- MAGISTRATES_COURT
+- HIGH_MAGISTRATES_COURT
+- HIGH_CRIMINAL_COURT
+- ADMINISTRATIVE_COURT
+- HIGH_ADMINISTRATIVE_COURT
+- CONSTITUTIONAL_COURT
+code:
+type: string
+description: Šifra suda
+description: Sud
+CourtNoticeSearchFilter:
+type: object
+properties:
+text:
+type: string
+description: Tekstualni pojam za pretraživanje - oznaka spisa, naslov
+objave,
+subjekt na kojeg se objava odnosi ili OIB
+22 / 26
+
+README.md
+
+2023-09-11
+
+datePublishedFrom:
+type: string
+description: Datum objave od
+format: date
+datePublishedTo:
+type: string
+description: Datum objave do
+format: date
+noticeSourceType:
+uniqueItems: true
+type: array
+description: Izvori oglasa
+items:
+type: string
+description: Izvori oglasa
+enum:
+- COURT
+- INSTITUTION
+- NOTARY_PUBLIC
+courtCode:
+uniqueItems: true
+type: array
+description: Šifre suda
+items:
+type: string
+description: Šifre suda
+caseType:
+uniqueItems: true
+type: array
+description: Tipovi oglasa sa suda
+items:
+type: string
+description: Tipovi oglasa sa suda
+enum:
+- NATURAL_PERSON_BANKRUPTCY
+- LEGAL_PERSON_BANKRUPTCY
+- OTHER
+debtorOib:
+uniqueItems: true
+type: array
+description: OIBovi dužnika
+items:
+type: string
+description: OIBovi dužnika
+vrstaOdlukeId:
+uniqueItems: true
+type: array
+description: Identifikatori vrste odluka oglasa sa suda
+items:
+type: integer
+description: Identifikatori vrste odluka oglasa sa suda
+format: int64
+vrstaPodneskaId:
+uniqueItems: true
+23 / 26
+
+README.md
+
+2023-09-11
+
+type: array
+description: Identifikatori vrste podnesaka oglasa sa suda
+items:
+type: integer
+description: Identifikatori vrste podnesaka oglasa sa suda
+format: int64
+description: Filter pretrage oglasa sa suda
+CourtNotice:
+type: object
+properties:
+uuid:
+type: string
+description: Jedinstveni identifikator oglasa
+publicUrl:
+type: string
+description: URL oglasa
+noticeDocumentsDownloadUrl:
+type: string
+description: URL za preuzimanje dokumenata objave
+noticeType:
+type: string
+description: Tip oglasa
+enum:
+- NOTICE
+- REPORT_NOTICE
+- INSTITUTION_NOTICE
+- COURT_NOTICE
+title:
+type: string
+description: Naslov oglasa
+expirationDate:
+type: string
+description: Poslijednji datum objave (datum isteka oglasa)
+format: date
+noticeDocuments:
+uniqueItems: true
+type: array
+description: Dokumenti
+items:
+$ref: '#/components/schemas/NoticeDocument'
+participants:
+uniqueItems: true
+type: array
+description: Sudionici
+items:
+$ref: '#/components/schemas/Participant'
+datePublished:
+type: string
+description: Datum i vrijeme objave
+format: date-time
+noticeSourceType:
+type: string
+description: Izvor oglasa
+enum:
+24 / 26
+
+README.md
+
+2023-09-11
+
+- COURT
+- INSTITUTION
+- NOTARY_PUBLIC
+court:
+$ref: '#/components/schemas/Court'
+caseNumber:
+type: string
+description: Broj predmeta na sudu
+caseType:
+type: string
+description: Tip oglasa sa suda
+enum:
+- NATURAL_PERSON_BANKRUPTCY
+- LEGAL_PERSON_BANKRUPTCY
+- OTHER
+courtNoticeDetails:
+$ref: '#/components/schemas/CourtNoticeDetails'
+description: Oglas sa suda
+CourtNoticeDetails:
+type: object
+properties:
+notaryPublicCaseNumber:
+type: string
+description: Broj javnobilježničkog predmeta
+notaryPublicOffice:
+$ref: '#/components/schemas/NotaryPublicOffice'
+description: Dodatni detalji oglasa sa suda
+NotaryPublicOffice:
+type: object
+properties:
+name:
+type: string
+description: Naziv
+address:
+type: string
+description: Adresa
+description: Javnobilježnički ured
+PageCourtNotice:
+type: object
+properties:
+totalElements:
+type: integer
+format: int64
+totalPages:
+type: integer
+format: int32
+size:
+type: integer
+format: int32
+content:
+type: array
+items:
+$ref: '#/components/schemas/CourtNotice'
+number:
+25 / 26
+
+README.md
+
+2023-09-11
+
+type: integer
+format: int32
+sort:
+$ref: '#/components/schemas/Sort'
+numberOfElements:
+type: integer
+format: int32
+first:
+type: boolean
+pageable:
+$ref: '#/components/schemas/Pageable'
+last:
+type: boolean
+empty:
+type: boolean
+
+26 / 26
+
+

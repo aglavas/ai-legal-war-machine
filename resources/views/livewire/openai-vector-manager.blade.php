@@ -33,14 +33,13 @@
     @if($selectedFile)
         <div class="mb-2">
             <h4 class="font-semibold">Metadata</h4>
-            <pre class="bg-slate-100 p-2 rounded text-xs">{{ json_encode($metadata, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE) }}</pre>
+            <pre style="overflow: auto" class="bg-slate-100 p-2 rounded text-xs ">{{ json_encode($metadata, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE) }}</pre>
         </div>
-        // resources/views/livewire/openai-vector-manager.blade.php (fix attributes section)
         <div class="mb-2">
             <h4 class="font-semibold">Attributes</h4>
-            <pre class="bg-slate-100 p-2 rounded text-xs">{{ json_encode($fileAttributes, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE) }}</pre>
+            <pre style="overflow: auto" class="bg-slate-100 p-2 rounded text-xs">{{ json_encode($fileAttributes, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE) }}</pre>
         </div>
-        <form wire:submit.prevent="saveMeta" class="space-y-2">
+        <form wire:submit="saveMeta" class="space-y-2">
             <div>
                 <label class="block font-medium">Nova metadata (JSON):</label>
                 <textarea wire:model.defer="newMetadata" class="w-full border rounded p-1 text-xs" rows="2"></textarea>

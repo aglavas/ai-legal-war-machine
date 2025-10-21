@@ -136,6 +136,11 @@ return [
         'cases_documents' => 'cases_documents',
         'cases_documents_uploads' => 'cases_documents_uploads',
         'ingested_laws' => 'ingested_laws',
+
+        // Court decisions (Odluke) - historical court practice
+        'court_decisions' => 'court_decisions',
+        'court_decision_documents' => 'court_decision_documents',
+        'court_decision_document_uploads' => 'court_decision_document_uploads',
     ],
 
     /**
@@ -280,6 +285,16 @@ return [
             ],
             'enabled' => env('MCP_SLACK_ENABLED', false) && ! empty(env('SLACK_BOT_TOKEN')),
             'timeout' => 30,
+        ],
+
+        // Odluke MCP server exposed via this app's HTTP MCP endpoint
+        'odluke' => [
+            'transport' => 'http',
+            // Use APP_URL by default, allow override via MCP_ODLUKE_URL
+            'url' => env('MCP_ODLUKE_URL', rtrim(env('APP_URL', 'http://localhost'), '/') . '/mcp/message'),
+            'enabled' => env('MCP_ODLUKE_ENABLED', true),
+            'timeout' => env('MCP_ODLUKE_TIMEOUT', 45),
+            'headers' => [],
         ],
 
         // Example custom MCP server

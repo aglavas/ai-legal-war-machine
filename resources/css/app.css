@@ -9,3 +9,153 @@
     --font-sans: 'Instrument Sans', ui-sans-serif, system-ui, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji',
         'Segoe UI Symbol', 'Noto Color Emoji';
 }
+
+/* Base layout (yours, unchanged except minor tweaks) */
+body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji"; }
+.container { margin: 2rem auto; padding: 0 1rem; }
+
+/* Stack with tiny seam between timenavs */
+#tl-compare-stack { display: flex; flex-direction: column; gap: 4px; }
+.tl-vcol { position: relative; background: #fff; border: 1px solid #e5e7eb; }
+.tl-vcol.top { border-radius: 12px 12px 0 0; }
+.tl-vcol.bottom { border-radius: 0 0 12px 12px; }
+
+/* Timeline boxes */
+.tl-embed { width: 100%; height: 40vh; min-height: 320px; }
+
+/* Remove extra spacing/branding to bring them closer visually */
+#tl-compare-stack .tl-embed .tl-attribution { display: none !important; }
+#tl-compare-stack .tl-embed .vco-navigation { margin: 0 !important; }
+#tl-compare-stack .tl-embed .tl-credit { display: none !important; }
+#tl-compare-stack .tl-embed .tl-timenav { border: 0 !important; }
+
+/* Crosshair overlay (visual only) */
+.sync-overlay { pointer-events: none; position: absolute; inset: 0; }
+.sync-line { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--tl-accent, #0ea5e9); opacity: .9; transform: translateX(-1px); left: 50%; }
+.sync-tooltip {
+    position: absolute; left: 50%; transform: translateX(-50%);
+    top: 6px; background: var(--tl-accent, #0ea5e9); color: #fff;
+    font: 12px/1.2 ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
+    padding: 3px 6px; border-radius: 4px; white-space: nowrap; box-shadow: 0 4px 10px rgba(2,6,23,.15);
+}
+
+/* --------------------------- */
+/* Theming "CSS interface"     */
+/* --------------------------- */
+/* 1) Variables: change once, restyles both nav + slides inside that column. */
+.tl-vcol {
+    --tl-bg:        #0b1220;   /* site background behind timenav */
+    --tl-surface:   #0f172a;   /* slide area background */
+    --tl-card:      #111827;   /* text panel background */
+    --tl-border:    #1f2937;
+    --tl-text:      #e5e7eb;
+    --tl-muted:     #94a3b8;
+    --tl-accent:    #38bdf8;   /* crosshair + accents */
+    --tl-active:    #f59e0b;   /* active flag bg */
+    --tl-flag-bg:   #111827;   /* nav flag bg */
+    --tl-flag-text: #dbeafe;   /* nav flag headline text */
+    --tl-grid:      #334155;   /* axis grid lines */
+    --tl-axis:      #64748b;   /* axis label */
+    --tl-shadow:    rgba(3,7,18,.5);
+}
+
+/* 2) Skins: slap one of these classes on a column to swap palette quickly */
+.tl-skin-ink { /* defaults above already "ink" */ }
+.tl-skin-sand { --tl-bg:#191611; --tl-surface:#22201b; --tl-card:#29261f; --tl-text:#eee7dc; --tl-muted:#c8bda8; --tl-accent:#eab308; --tl-active:#f97316; --tl-flag-bg:#312e23; --tl-flag-text:#fff5e8; --tl-grid:#3a342a; --tl-axis:#a08f71; }
+.tl-skin-forest { --tl-bg:#0d1714; --tl-surface:#0f201b; --tl-card:#12261f; --tl-text:#d9f99d; --tl-muted:#86efac; --tl-accent:#22d3ee; --tl-active:#84cc16; --tl-flag-bg:#0f291f; --tl-flag-text:#eafff2; --tl-grid:#1a3127; --tl-axis:#86efac; }
+
+/* 3) Apply variables to TimelineJS internals with sufficiently specific selectors. */
+/* Slide/story area */
+#tl-compare-stack .tl-embed .tl-slider-container-mask { background: var(--tl-surface) !important; }
+#tl-compare-stack .tl-embed .tl-text { background: var(--tl-card) !important; color: var(--tl-text) !important; }
+#tl-compare-stack .tl-embed .tl-text .tl-headline-date { color: var(--tl-muted) !important; }
+#tl-compare-stack .tl-embed h2.tl-headline { color: var(--tl-text) !important; }
+#tl-compare-stack .tl-embed .tl-caption,
+#tl-compare-stack .tl-embed .tl-credit { color: var(--tl-muted) !important; }
+
+/* Nav background + axis */
+#tl-compare-stack .tl-embed .tl-timenav { background: var(--tl-bg) !important; }
+#tl-compare-stack .tl-embed .tl-timeaxis { color: var(--tl-axis) !important; }
+#tl-compare-stack .tl-embed .tl-timeaxis .tl-timeaxis-tick:before { background: var(--tl-grid) !important; }
+#tl-compare-stack .tl-embed .tl-timeaxis.tl-timeaxis-major .tl-timeaxis-tick:before { background: color-mix(in srgb, var(--tl-grid) 80%, #0000) !important; }
+
+/* Flags/markers: default and active */
+#tl-compare-stack .tl-embed .tl-timemarker .tl-timemarker-content-container {
+    background: var(--tl-flag-bg) !important; color: var(--tl-flag-text) !important;
+    border: 1px solid var(--tl-border) !important; box-shadow: 0 2px 8px var(--tl-shadow) !important;
+}
+#tl-compare-stack .tl-embed .tl-timemarker.tl-timemarker-active .tl-timemarker-content-container {
+    background: var(--tl-active) !important; color: #111827 !important; border-color: color-mix(in srgb, var(--tl-active) 70%, #000) !important;
+}
+/* Timespan band behind markers (events with end date) */
+#tl-compare-stack .tl-embed .tl-timemarker .tl-timemarker-timespan {
+    background: color-mix(in srgb, var(--tl-active) 22%, #0000) !important;
+}
+
+/* Zoom icons */
+#tl-compare-stack .tl-embed .tl-menubar { background: transparent !important; }
+#tl-compare-stack .tl-embed .tl-menubar * { color: var(--tl-muted) !important; }
+
+/* Optional: soften next/prev slab */
+#tl-compare-stack .tl-embed .tl-slidenav-next,
+#tl-compare-stack .tl-embed .tl-slidenav-previous { background: color-mix(in srgb, var(--tl-bg) 75%, #0000) !important; }
+#tl-compare-stack .tl-embed .tl-slidenav-title,
+#tl-compare-stack .tl-embed .tl-slidenav-description { color: var(--tl-muted) !important; }
+
+
+
+.tl-skin-light {
+    --tl-bg:        #f8fafc;   /* timenav background */
+    --tl-surface:   #ffffff;   /* slider mask background */
+    --tl-card:      #ffffff;   /* text panel background */
+    --tl-border:    #e5e7eb;
+    --tl-text:      #0f172a;   /* body and headlines */
+    --tl-muted:     #475569;   /* captions, dates */
+    --tl-accent:    #2563eb;   /* crosshair + accents */
+    --tl-active:    #fde68a;   /* active flag bg (warm highlight) */
+    --tl-flag-bg:   #ffffff;   /* nav flag background */
+    --tl-flag-text: #0f172a;   /* nav flag headline text */
+    --tl-grid:      #e2e8f0;   /* axis grid lines */
+    --tl-axis:      #475569;   /* axis labels */
+    --tl-shadow:    rgba(2,6,23,.08);
+}
+
+/* Apply variables to TimelineJS internals (same specific selectors as before) */
+#tl-compare-stack .tl-embed .tl-slider-container-mask { background: var(--tl-surface) !important; }
+#tl-compare-stack .tl-embed .tl-text { background: var(--tl-card) !important; color: var(--tl-text) !important; }
+#tl-compare-stack .tl-embed .tl-text .tl-headline-date { color: var(--tl-muted) !important; }
+#tl-compare-stack .tl-embed h2.tl-headline { color: var(--tl-text) !important; }
+#tl-compare-stack .tl-embed .tl-caption,
+#tl-compare-stack .tl-embed .tl-credit { color: var(--tl-muted) !important; }
+
+/* Timenav and axis */
+#tl-compare-stack .tl-embed .tl-timenav { background: var(--tl-bg) !important; }
+#tl-compare-stack .tl-embed .tl-timeaxis { color: var(--tl-axis) !important; }
+#tl-compare-stack .tl-embed .tl-timeaxis .tl-timeaxis-tick:before { background: var(--tl-grid) !important; }
+
+/* Flags (inactive + active) */
+#tl-compare-stack .tl-embed .tl-timemarker .tl-timemarker-content-container {
+    background: var(--tl-flag-bg) !important;
+    color: var(--tl-flag-text) !important;
+    border: 1px solid var(--tl-border) !important;
+    box-shadow: 0 2px 8px var(--tl-shadow) !important;
+}
+#tl-compare-stack .tl-embed .tl-timemarker.tl-timemarker-active .tl-timemarker-content-container {
+    background: var(--tl-active) !important;
+    color: #1f2937 !important;
+    border-color: #f59e0b33 !important;
+}
+/* Timespan band behind markers (events with end date) */
+#tl-compare-stack .tl-embed .tl-timemarker .tl-timemarker-timespan { background: rgba(37,99,235,.11) !important; }
+
+/* Zoom icons + nav hints */
+#tl-compare-stack .tl-embed .tl-menubar { background: transparent !important; }
+#tl-compare-stack .tl-embed .tl-menubar * { color: var(--tl-muted) !important; }
+#tl-compare-stack .tl-embed .tl-slidenav-next,
+#tl-compare-stack .tl-embed .tl-slidenav-previous { background: #00000008 !important; }
+#tl-compare-stack .tl-embed .tl-slidenav-title,
+#tl-compare-stack .tl-embed .tl-slidenav-description { color: var(--tl-muted) !important; }
+
+/* Crosshair uses --tl-accent so it picks up per-skin accent automatically */
+.sync-line { background: var(--tl-accent, #2563eb); }
+.sync-tooltip { background: var(--tl-accent, #2563eb); }

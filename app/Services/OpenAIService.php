@@ -2,21 +2,52 @@
 
 namespace App\Services;
 
+use Illuminate\Http\Client\ConnectionException;
+use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Http\Client\Pool;
+use Illuminate\Http\Client\RequestException;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
 use Illuminate\Support\Facades\Log;
+use Psr\Log\LoggerInterface;
+use Throwable;
 
 class OpenAIService
 {
+    /**
+     * @var string $apiKey
+     */
     protected string $apiKey;
+
+    /**
+     * @var string|\Illuminate\Config\Repository|\Illuminate\Foundation\Application|mixed|object|null $organization
+     */
     protected ?string $organization;
+
+    /**
+     * @var string|\Illuminate\Config\Repository|\Illuminate\Foundation\Application|mixed|object|null $project
+     */
     protected ?string $project;
+
+    /**
+     * @var string $baseUrl
+     */
     protected string $baseUrl;
+
+    /**
+     * @var int $timeout
+     */
     protected int $timeout;
+
+    /**
+     * @var int $connectTimeout
+     */
     protected int $connectTimeout;
 
+    /**
+     *
+     */
     public function __construct()
     {
         $this->apiKey = (string) config('openai.api_key');
@@ -27,6 +58,9 @@ class OpenAIService
         $this->connectTimeout = (int) config('openai.connect_timeout', 10);
     }
 
+    /**
+     * @return PendingRequest
+     */
     protected function client()
     {
         if (!$this->apiKey) {
@@ -50,18 +84,25 @@ class OpenAIService
             ->connectTimeout($this->connectTimeout);
     }
 
+    /**
+     * @return LoggerInterface
+     */
     protected function logChannel()
     {
         return Log::channel('openai');
     }
 
-    // General request wrapper
+    /**
+     * @param string $method
+     * @param string $url
+     * @param array $payload
+     * @return array|mixed
+     * @throws Throwable
+     */
     protected function request(string $method, string $url, array $payload = [])
     {
         $reqId = (string) Str::uuid();
         $start = microtime(true);
-
-        // Log request start (avoid logging binary)
         $this->logChannel()->info('openai.request', [
             'event' => 'openai.request',
             'request_id' => $reqId,
@@ -71,9 +112,16 @@ class OpenAIService
         ]);
 
         try {
-            $resp = $this->client()->send($method, ltrim($url, '/'), [
-                'json' => $payload,
-            ]);
+            $pendingRequest = $this->client();
+
+            if (!count($payload)) {
+                $resp = $pendingRequest->send($method, ltrim($url, '/'));
+            } else {
+                $resp = $pendingRequest->send($method, ltrim($url, '/'), [
+                    'json' => $payload,
+                ]);
+            }
+
             $duration = (int) round((microtime(true) - $start) * 1000);
 
             $status = $resp->status();
@@ -81,7 +129,7 @@ class OpenAIService
             $json = null;
             try {
                 $json = $resp->json();
-            } catch (\Throwable $e) {
+            } catch (Throwable $e) {
                 $json = null;
             }
 
@@ -97,7 +145,7 @@ class OpenAIService
 
             $resp->throw();
             return $json ?? [];
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             $duration = (int) round((microtime(true) - $start) * 1000);
             $code = method_exists($e, 'getCode') ? $e->getCode() : 0;
             $this->logChannel()->error('openai.error', [
@@ -114,7 +162,12 @@ class OpenAIService
         }
     }
 
-    // Lightweight GET wrapper with additional headers and logging
+    /**
+     * @param string $url
+     * @param array $headers
+     * @return array|mixed
+     * @throws Throwable
+     */
     protected function getWithHeaders(string $url, array $headers = [])
     {
         $reqId = (string) Str::uuid();
@@ -137,7 +190,7 @@ class OpenAIService
             $json = null;
             try {
                 $json = $resp->json();
-            } catch (\Throwable $e) {
+            } catch (Throwable $e) {
                 $json = null;
             }
 
@@ -153,7 +206,7 @@ class OpenAIService
 
             $resp->throw();
             return $json ?? [];
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             $duration = (int) round((microtime(true) - $start) * 1000);
             $this->logChannel()->error('openai.error', [
                 'event' => 'openai.error',
@@ -169,7 +222,11 @@ class OpenAIService
         }
     }
 
-    // Responses API
+    /**
+     * @param array $options
+     * @return array
+     * @throws Throwable
+     */
     public function responses(array $options): array
     {
         $options['model'] = $options['model'] ?? config('openai.models.responses');
@@ -247,7 +304,13 @@ class OpenAIService
         return $this->getWithHeaders("/responses/{$responseId}/input_items" . $qs, $headers);
     }
 
-    // Chat Completions (legacy-style)
+    /**
+     * @param array $messages
+     * @param string|null $model
+     * @param array $options
+     * @return array
+     * @throws Throwable
+     */
     public function chat(array $messages, ?string $model = null, array $options = []): array
     {
         $payload = array_merge($options, [
@@ -257,7 +320,13 @@ class OpenAIService
         return $this->request('POST', '/chat/completions', $payload);
     }
 
-    // Embeddings
+    /**
+     * @param string|array $input
+     * @param string|null $model
+     * @param array $options
+     * @return array
+     * @throws Throwable
+     */
     public function embeddings(string|array $input, ?string $model = null, array $options = []): array
     {
         $payload = array_merge($options, [
@@ -267,7 +336,39 @@ class OpenAIService
         return $this->request('POST', '/embeddings', $payload);
     }
 
-    // Images generation
+    /**
+     * Wrapper for the Responses API list endpoint with sensible defaults and proper headers.
+     * This replaces the previous raw curl/Guzzle snippet.
+     *
+     * Supported $query keys include: created_after, created_before, limit, order, input_item_limit, output_item_limit.
+     * Use $include for repeated include[] values (e.g. message.input_image.image_url).
+     */
+    public function getResponses(array $query = [], array $include = []): array
+    {
+        $query = array_filter([
+            'created_after' => $query['created_after'] ?? null,
+            'created_before' => $query['created_before'] ?? null,
+            'limit' => $query['limit'] ?? null,
+            'order' => $query['order'] ?? null,
+            'input_item_limit' => $query['input_item_limit'] ?? 1,
+            'output_item_limit' => $query['output_item_limit'] ?? 1,
+        ], fn($v) => $v !== null);
+
+        $include = $include ?: [
+            'message.input_text',
+            'output_text',
+            // add more includes as needed for richer previews
+        ];
+
+        return $this->responsesList($query, $include);
+    }
+
+    /**
+     * @param string $prompt
+     * @param array $options
+     * @return array
+     * @throws Throwable
+     */
     public function imageGenerate(string $prompt, array $options = []): array
     {
         $payload = array_merge([
@@ -280,7 +381,14 @@ class OpenAIService
         return $this->request('POST', '/images/generations', $payload);
     }
 
-    // Audio Transcription (Speech-to-Text)
+    /**
+     * @param string $filePath
+     * @param array $options
+     * @return array|mixed
+     * @throws ConnectionException
+     * @throws RequestException
+     * @throws Throwable
+     */
     public function transcribe(string $filePath, array $options = [])
     {
         $model = $options['model'] ?? config('openai.models.stt');
@@ -328,7 +436,7 @@ class OpenAIService
 
             $resp->throw();
             return $resp->json();
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             $duration = (int) round((microtime(true) - $start) * 1000);
             $this->logChannel()->error('openai.error', [
                 'event' => 'openai.error',
@@ -344,7 +452,13 @@ class OpenAIService
         }
     }
 
-    // Text-to-Speech
+    /**
+     * @param string $text
+     * @param array $options
+     * @return string
+     * @throws ConnectionException
+     * @throws RequestException
+     */
     public function tts(string $text, array $options = []): string
     {
         $model = $options['model'] ?? config('openai.models.tts');
@@ -399,7 +513,14 @@ class OpenAIService
         return (string) $resp->body(); // binary audio
     }
 
-    // Files API
+    /**
+     * @param string $path
+     * @param string $purpose
+     * @return array
+     * @throws ConnectionException
+     * @throws RequestException
+     * @throws Throwable
+     */
     public function fileUpload(string $path, string $purpose = 'assistants'): array
     {
         $headers = [
@@ -447,7 +568,7 @@ class OpenAIService
 
             $resp->throw();
             return $resp->json();
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             $duration = (int) round((microtime(true) - $start) * 1000);
             $this->logChannel()->error('openai.error', [
                 'event' => 'openai.error',
@@ -463,80 +584,185 @@ class OpenAIService
         }
     }
 
+    /**
+     * @return array
+     * @throws Throwable
+     */
     public function fileList(): array
     {
         return $this->request('GET', '/files');
     }
 
+    /**
+     * @param string $fileId
+     * @return array
+     * @throws Throwable
+     */
     public function fileRetrieve(string $fileId): array
     {
         return $this->request('GET', "/files/{$fileId}");
     }
 
+    /**
+     * @param string $fileId
+     * @return array
+     * @throws Throwable
+     */
     public function fileDelete(string $fileId): array
     {
         return $this->request('DELETE', "/files/{$fileId}");
     }
 
-    // Assistants
+    /**
+     * @param array $data
+     * @return array
+     * @throws Throwable
+     */
     public function assistantsCreate(array $data): array
     {
         $data['model'] = $data['model'] ?? config('openai.models.chat');
         return $this->request('POST', '/assistants', $data);
     }
 
+    /**
+     * @param string $assistantId
+     * @return array
+     * @throws Throwable
+     */
     public function assistantsRetrieve(string $assistantId): array
     {
         return $this->request('GET', "/assistants/{$assistantId}");
     }
 
+    /**
+     * @param array $query
+     * @return array
+     * @throws ConnectionException
+     * @throws RequestException
+     */
     public function assistantsList(array $query = []): array
     {
         return $this->client()->get('/assistants', $query)->throw()->json();
     }
 
+    /**
+     * @param string $assistantId
+     * @return array
+     * @throws Throwable
+     */
     public function assistantsDelete(string $assistantId): array
     {
         return $this->request('DELETE', "/assistants/{$assistantId}");
     }
 
-    // Vector Stores
+    /**
+     * @param array $data
+     * @return array
+     * @throws Throwable
+     */
     public function vectorStoreCreate(array $data): array
     {
         return $this->request('POST', '/vector_stores', $data);
     }
 
+    /**
+     * @param string $storeId
+     * @return array
+     * @throws Throwable
+     */
     public function vectorStoreRetrieve(string $storeId): array
     {
         return $this->request('GET', "/vector_stores/{$storeId}");
     }
 
+    /**
+     * @param array $query
+     * @return array
+     * @throws ConnectionException
+     * @throws RequestException
+     */
     public function vectorStoreList(array $query = []): array
     {
         return $this->client()->get('/vector_stores', $query)->throw()->json();
     }
 
+    /**
+     * @param string $storeId
+     * @return array
+     * @throws Throwable
+     */
     public function vectorStoreDelete(string $storeId): array
     {
         return $this->request('DELETE', "/vector_stores/{$storeId}");
     }
 
+    /**
+     * @param string $storeId
+     * @param string $fileId
+     * @return array
+     * @throws Throwable
+     */
     public function vectorStoreAddFile(string $storeId, string $fileId): array
     {
         return $this->request('POST', "/vector_stores/{$storeId}/files", ['file_id' => $fileId]);
     }
 
+    /**
+     * @param string $storeId
+     * @param array $query
+     * @return array
+     * @throws ConnectionException
+     * @throws RequestException
+     */
     public function vectorStoreListFiles(string $storeId, array $query = []): array
     {
         return $this->client()->get("/vector_stores/{$storeId}/files", $query)->throw()->json();
     }
 
+    /**
+     * @param string $storeId
+     * @param string $fileId
+     * @return array
+     * @throws Throwable
+     */
     public function vectorStoreDeleteFile(string $storeId, string $fileId): array
     {
         return $this->request('DELETE', "/vector_stores/{$storeId}/files/{$fileId}");
     }
 
-    // Utility to convert array params to multipart entries
+    /**
+     * @param string $storeId
+     * @param string $fileId
+     * @param array $data
+     * @return array
+     * @throws Throwable
+     */
+    public function vectorStoreFileMetadataUpdate(string $storeId, string $fileId, array $data): array
+    {
+        $metadata = $data['metadata'] ?? [];
+
+        if (!empty($metadata) && (!empty($data['attributes']))) {
+            $metadata['attributes'] = $data['attributes'];
+        }
+
+        return $this->request('POST', "/vector_stores/{$storeId}/files/{$fileId}", $metadata);
+    }
+
+    /**
+     * @param string $storeId
+     * @param string $fileId
+     * @return array
+     * @throws Throwable
+     */
+    public function vectorStoreGetFile(string $storeId, string $fileId): array
+    {
+        return $this->request('GET', "/vector_stores/{$storeId}/files/{$fileId}");
+    }
+
+    /**
+     * @param array $params
+     * @return array
+     */
     protected function toMultipart(array $params): array
     {
         $parts = [];

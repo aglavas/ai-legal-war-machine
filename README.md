@@ -133,3 +133,74 @@ Artifacts will appear on S3:
 - FPDI/TCPDF overlays OCR LINE blocks as invisible text; adjust opacity in `PdfReconstructor` if you want to debug placement.
 - For large PDFs, consider SNS/SQS instead of polling Textract.
 - The pipeline defaults to LINE blocks; WORD-level placement is possible with minor changes.
+
+## Odluke Agent (ChatGPT + MCP)
+
+This app includes an autonomous agent `odluke_agent` powered by OpenAI (ChatGPT) via Vizra ADK. It uses MCP tools to search and download decisions from odluke.sudovi.hr.
+
+### Configure
+
+Set the following in your `.env`:
+
+- `APP_URL` (e.g., `http://localhost:8000`)
+- `OPENAI_API_KEY` (required)
+- optional: `MCP_ODLUKE_URL` (defaults to `${APP_URL}/mcp/message`)
+
+The MCP HTTP server is exposed at `/mcp/message` and is auto-registered by `php-mcp/laravel`.
+
+### Quick start
+
+1) Start the Laravel server and queues as usual.
+
+2) Call the agent via Vizra ADK API:
+
+```
+curl -sS -X POST "$APP_URL/api/vizra-adk/interact" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "agent_name": "odluke_agent",
+    "input": "Pronađi najnovije presude o ugovoru o radu i preuzmi PDF jedne relevantne presude"
+  }'
+```
+
+3) Optional: test MCP directly
+
+- Initialize and list tools
+```
+curl -sS -X POST "$APP_URL/mcp/message" -H 'Content-Type: application/json' -d '{
+  "jsonrpc":"2.0","id":1,
+  "method":"initialize",
+  "params":{
+    "protocolVersion":"2024-11-05",
+    "capabilities":{"tools":{},"resources":{},"prompts":{}},
+    "clientInfo":{"name":"local","version":"dev"}
+  }
+}'
+
+curl -sS -X POST "$APP_URL/mcp/message" -H 'Content-Type: application/json' -d '{
+  "jsonrpc":"2.0","id":2,
+  "method":"tools/list"
+}'
+```
+
+- Call `odluke-search`
+```
+curl -sS -X POST "$APP_URL/mcp/message" -H 'Content-Type: application/json' -d '{
+  "jsonrpc":"2.0","id":3,
+  "method":"tools/call",
+  "params":{ "name":"odluke-search", "arguments":{ "q":"ugovor o radu", "limit":25, "page":1 }}
+}'
+```
+
+### What the agent does
+
+- Uses `odluke-search` to find IDs by topic/filters.
+- Uses `odluke-meta` to score and shortlist results.
+- Uses `odluke-download` to fetch PDF/HTML (set `save=true` when appropriate).
+- Produces a concise Croatian or user-language summary and listed downloads.
+
+### Notes
+
+- Saved files default to `storage/app/odluke`. Configure via `config/odluke.php` if present.
+- Ensure `APP_URL` is correct for MCP HTTP calls.
+- The agent uses model `gpt-4.1-mini` by default; change in `App/Agents/OdlukeAgent.php` if needed.

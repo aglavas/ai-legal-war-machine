@@ -2,9 +2,9 @@
 
 namespace App\Services\Odluke;
 
-use App\Models\CaseDocumentUpload;
-use App\Models\LegalCase;
-use App\Services\CaseVectorStoreService;
+use App\Models\CourtDecision;
+use App\Models\CourtDecisionDocumentUpload;
+use App\Services\CourtDecisionVectorStoreService;
 use App\Services\IngestPipelineService;
 use App\Services\MetadataBuilder;
 use App\Services\OcrService;
@@ -17,13 +17,13 @@ class OdlukeIngestService
     public function __construct(
         protected OdlukeClient $client,
         protected IngestPipelineService $pipeline,
-        protected CaseVectorStoreService $caseVectors,
+        protected CourtDecisionVectorStoreService $decisionVectors,
         protected ?OcrService $ocr = null,
         protected ?MetadataBuilder $meta = null,
     ) {}
 
     /**
-     * Ingest decisions by IDs: fetch HTML (preferred) or PDF, extract text, chunk and embed into cases_documents. Also store local PDF upload when used.
+     * Ingest decisions by IDs: fetch HTML (preferred) or PDF, extract text, chunk and embed into court_decision_documents. Also store local PDF upload when used.
      * Options: model, chunk_chars, overlap, prefer ('auto'|'html'|'pdf'), dry
      */
     public function ingestByIds(array $ids, array $options = []): array
@@ -42,9 +42,7 @@ class OdlukeIngestService
             $count++;
             try {
                 $meta = $this->client->fetchDecisionMeta($id) ?? [];
-
-                // Upsert case using available meta
-                $case = $this->upsertCaseFromMeta($meta);
+                $decision = $this->upsertDecisionFromMeta($meta);
 
                 $htmlRes = null; $pdfRes = null; $text = '';
                 $uploadId = null; $docId = $meta['ecli'] ?? $id;
@@ -53,15 +51,15 @@ class OdlukeIngestService
                     $htmlRes = $this->client->downloadHtml($id);
                     if (($htmlRes['ok'] ?? false) && is_string($htmlRes['bytes'])) {
                         $text = $this->htmlToText($htmlRes['bytes']);
-                        $this->persistSource($id, $htmlRes['bytes'], 'html', $case);
+                        $this->persistSource($id, $htmlRes['bytes'], 'html', $decision);
                     }
                 }
                 if ($text === '' && $prefer !== 'html') {
                     $pdfRes = $this->client->downloadPdf($id);
                     if (($pdfRes['ok'] ?? false) && is_string($pdfRes['bytes'])) {
-                        $this->persistSource($id, $pdfRes['bytes'], 'pdf', $case);
+                        $this->persistSource($id, $pdfRes['bytes'], 'pdf', $decision);
                         if (!$dry) {
-                            $rel = $this->storePdfUpload($case, $id, $pdfRes['bytes']);
+                            $rel = $this->storePdfUpload($decision, $id, $pdfRes['bytes']);
                             $uploadId = $rel['upload_id'] ?? null;
                         }
                         if ($this->ocr) {
@@ -90,7 +88,7 @@ class OdlukeIngestService
                         ];
                     }
 
-                    $res = $this->caseVectors->ingest((string)$case->id, $docId, $docs, [
+                    $res = $this->decisionVectors->ingest((string)$decision->id, $docId, $docs, [
                         'model' => $model,
                         'provider' => 'openai',
                         'upload_id' => $uploadId,
@@ -114,25 +112,25 @@ class OdlukeIngestService
         ];
     }
 
-    /** Persist original source for traceability under storage/app/cases/{case}/sources/{id}.{ext} */
-    protected function persistSource(string $id, string $bytes, string $ext, LegalCase $case): void
+    /** Persist original source for traceability under storage/app/court_decisions/{decision}/sources/{id}.{ext} */
+    protected function persistSource(string $id, string $bytes, string $ext, CourtDecision $decision): void
     {
-        $dir = $this->caseBaseDir($case) . '/sources';
+        $dir = $this->decisionBaseDir($decision) . '/sources';
         $path = $dir.'/'. $id .'.'. $ext;
         Storage::put($path, $bytes);
     }
 
-    protected function storePdfUpload(LegalCase $case, string $id, string $bytes): array
+    protected function storePdfUpload(CourtDecision $decision, string $id, string $bytes): array
     {
-        $dir = $this->caseBaseDir($case) . '/pdfs';
+        $dir = $this->decisionBaseDir($decision) . '/pdfs';
         $fileName = 'decision-'.$id.'.pdf';
         $rel = $dir.'/'.$fileName;
         Storage::put($rel, $bytes);
         $abs = Storage::path($rel);
 
-        $upload = CaseDocumentUpload::create([
+        $upload = CourtDecisionDocumentUpload::create([
             'id' => (string) Str::ulid(),
-            'case_id' => (string) $case->id,
+            'decision_id' => (string) $decision->id,
             'doc_id' => $id,
             'disk' => 'local',
             'local_path' => $rel,
@@ -148,11 +146,11 @@ class OdlukeIngestService
         return ['upload_id' => (string) $upload->id, 'rel_path' => $rel, 'abs_path' => $abs];
     }
 
-    protected function caseBaseDir(LegalCase $case): string
+    protected function decisionBaseDir(CourtDecision $decision): string
     {
-        $court = Str::slug((string)($case->court ?? 'court'));
-        $num = Str::slug((string)($case->case_number ?? (string)$case->id));
-        return 'cases/'.$court.'/'.$num;
+        $court = Str::slug((string)($decision->court ?? 'court'));
+        $num = Str::slug((string)($decision->case_number ?? (string)$decision->id));
+        return 'court_decisions/'.$court.'/'.$num;
     }
 
     protected function htmlToText(string $html): string
@@ -170,19 +168,23 @@ class OdlukeIngestService
         return $path;
     }
 
-    protected function upsertCaseFromMeta(array $m): LegalCase
+    protected function upsertDecisionFromMeta(array $m): CourtDecision
     {
         $caseNumber = trim((string)($m['broj_odluke'] ?? '')) ?: null;
         $court = trim((string)($m['sud'] ?? '')) ?: null;
+        $ecli = trim((string)($m['ecli'] ?? '')) ?: null;
+
         $attrs = [
             'title' => (string)($m['vrsta_odluke'] ?? 'Sudska odluka'),
-            'client_name' => null,
-            'opponent_name' => null,
             'court' => $court,
             'jurisdiction' => 'HR',
             'judge' => null,
-            'filing_date' => $m['datum_objave'] ?? ($m['datum_odluke'] ?? null),
-            'status' => null,
+            'decision_date' => $m['datum_odluke'] ?? null,
+            'publication_date' => $m['datum_objave'] ?? null,
+            'decision_type' => $m['vrsta_odluke'] ?? null,
+            'register' => $m['upisnik'] ?? null,
+            'finality' => $m['pravomocnost'] ?? null,
+            'ecli' => $ecli,
             'tags' => array_filter([
                 $m['vrsta_odluke'] ?? null,
                 $m['upisnik'] ?? null,
@@ -191,18 +193,24 @@ class OdlukeIngestService
             'description' => null,
         ];
 
-        if ($caseNumber && $court) {
-            $case = LegalCase::query()->where('case_number', $caseNumber)->where('court', $court)->first();
-            if ($case) {
-                $case->fill($attrs)->save();
-                return $case;
-            }
+        // Try to find existing by ECLI first, then by case_number + court
+        $decision = null;
+        if ($ecli) {
+            $decision = CourtDecision::query()->where('ecli', $ecli)->first();
+        }
+        if (!$decision && $caseNumber && $court) {
+            $decision = CourtDecision::query()->where('case_number', $caseNumber)->where('court', $court)->first();
+        }
+
+        if ($decision) {
+            $decision->fill($attrs)->save();
+            return $decision;
         }
 
         $payload = array_merge(['id' => (string) Str::ulid(), 'case_number' => $caseNumber], (array) $attrs);
-        $case = new LegalCase($payload);
-        $case->save();
-        return $case;
+        $decision = new CourtDecision($payload);
+        $decision->save();
+        return $decision;
     }
 
     protected function buildMetadata(array $m, string $id, int $chunkIndex): array
@@ -238,8 +246,8 @@ class OdlukeIngestService
             return ['ids_processed' => 0, 'inserted' => 0, 'would_chunks' => 0, 'errors' => 0, 'skipped' => 1, 'model' => $model, 'dry' => $dry];
         }
 
-        // Upsert case
-        $case = $this->upsertCaseFromMeta($meta);
+        // Upsert decision
+        $decision = $this->upsertDecisionFromMeta($meta);
         $docId = $meta['ecli'] ?? ('offline-'.substr(sha1($text), 0, 12));
 
         $chunks = $this->pipeline->chunkText($text, $chunkChars, $overlap);
@@ -257,18 +265,14 @@ class OdlukeIngestService
                     'source_id' => $docId,
                 ];
             }
-            $res = $this->caseVectors->ingest((string)$case->id, $docId, $docs, ['model' => $model, 'provider' => 'openai']);
-            $inserted += (int)($res['inserted'] ?? 0);
+
+            $res = $this->decisionVectors->ingest((string)$decision->id, $docId, $docs, [
+                'model' => $model,
+                'provider' => 'openai',
+            ]);
+            $inserted = (int)($res['inserted'] ?? 0);
         }
 
-        return [
-            'ids_processed' => 1,
-            'inserted' => $inserted,
-            'would_chunks' => $would,
-            'errors' => 0,
-            'skipped' => 0,
-            'model' => $model,
-            'dry' => $dry,
-        ];
+        return ['ids_processed' => 1, 'inserted' => $inserted, 'would_chunks' => $would, 'errors' => 0, 'skipped' => 0, 'model' => $model, 'dry' => $dry];
     }
 }

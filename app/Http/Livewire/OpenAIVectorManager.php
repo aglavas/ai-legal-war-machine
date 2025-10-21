@@ -4,36 +4,78 @@ namespace App\Http\Livewire;
 
 use Livewire\Component;
 use App\Services\OpenAIService;
-
 class OpenAIVectorManager extends Component
 {
-    public $stores = [];
-    public $selectedStore = null;
-    public $files = [];
-    public $selectedFile = null;
-    public $metadata = [];
-    public $fileAttributes = [];
-    public $newMetadata = "";
-    public $newAttributes = "";
-    public $error = null;
+    /**
+     * @var array $stores
+     */
+    public array $stores = [];
 
+    /**
+     * @var string|null $selectedStore
+     */
+    public string|null $selectedStore = null;
+
+    /**
+     * @var array $files
+     */
+    public array $files = [];
+
+    /**
+     * @var string|null $selectedFile
+     */
+    public string|null $selectedFile = null;
+
+    /**
+     * @var array $metadata
+     */
+    public array $metadata = [];
+
+    /**
+     * @var array $fileAttributes
+     */
+    public array $fileAttributes = [];
+
+    /**
+     * @var string $newMetadata
+     */
+    public string $newMetadata = '';
+
+    /**
+     * @var string $newAttributes
+     */
+    public string $newAttributes = '';
+
+    /**
+     * @var string|null $error
+     */
+    public ?string $error = null;
+
+    /**
+     * @var array $rules
+     */
     protected $rules = [
         'newMetadata' => 'nullable|string',
         'newAttributes' => 'nullable|string',
     ];
 
+    /**
+     * @return void
+     */
     public function mount()
     {
         $this->fetchStores();
     }
 
+    /**
+     * @return void
+     */
     public function fetchStores()
     {
         try {
             $service = app(OpenAIService::class);
             $this->stores = $service->vectorStoreList()['data'] ?? [];
         } catch (\Exception $e) {
-            dd($e->getMessage());
             $this->error = $e->getMessage();
         }
     }
@@ -44,6 +86,9 @@ class OpenAIVectorManager extends Component
         $this->fetchFiles();
     }
 
+    /**
+     *
+     */
     public function fetchFiles()
     {
         $this->files = [];
@@ -55,7 +100,6 @@ class OpenAIVectorManager extends Component
             $service = app(OpenAIService::class);
             $this->files = $service->vectorStoreListFiles($this->selectedStore)['data'] ?? [];
         } catch (\Exception $e) {
-            dd($e->getMessage());
             $this->error = $e->getMessage();
         }
     }
@@ -73,39 +117,43 @@ class OpenAIVectorManager extends Component
         if (!$this->selectedFile) return;
         try {
             $service = app(OpenAIService::class);
-            $file = $service->fileRetrieve($this->selectedFile);
-            $this->metadata = $file['metadata'] ?? [];
+            $file = $service->vectorStoreGetFile($this->selectedStore, $this->selectedFile);
+            $this->metadata = $file ?? [];
             $this->fileAttributes = $file['attributes'] ?? [];
         } catch (\Exception $e) {
-            dd($e->getMessage());
             $this->error = $e->getMessage();
         }
     }
 
-    public function saveMeta()
+    /**
+     * @return void
+     */
+    public function saveMeta(): void
     {
         $this->validate();
         // Pretpostavljamo da postoji metoda za spremanje metapodataka/atributa
         try {
             $service = app(OpenAIService::class);
             $payload = [];
-            if ($this->newMetadata) {
+
+            if (!empty($this->newMetadata)) {
                 $payload['metadata'] = json_decode($this->newMetadata, true);
             }
-            if ($this->newAttributes) {
+
+            if (!empty($this->newAttributes)) {
                 $payload['attributes'] = json_decode($this->newAttributes, true);
             }
-            // Ovdje bi išao API call za update file-a, placeholder:
-            // $service->fileUpdate($this->selectedFile, $payload);
-            // Za sada samo simuliramo refresh
+
+            $response = $service->vectorStoreFileMetadataUpdate($this->selectedStore, $this->selectedFile, $payload);
             $this->fetchFileMeta();
         } catch (\Exception $e) {
-            var_dump($e->getMessage());
-            die();
             $this->error = $e->getMessage();
         }
     }
 
+    /**
+     *
+     */
     public function render()
     {
         return view('livewire.openai-vector-manager');
