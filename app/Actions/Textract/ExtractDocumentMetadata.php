@@ -3,16 +3,22 @@
 namespace App\Actions\Textract;
 
 use App\Models\TextractJob;
-use App\Services\Ocr\DocumentMetadata;
-use App\Services\Ocr\DocumentMetadataExtractor;
+use App\Services\Ocr\LegalDocumentMetadata;
+use App\Services\Ocr\LegalMetadataExtractor;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Lorisleiva\Actions\Concerns\AsAction;
 
 /**
  * Action: ExtractDocumentMetadata
- * Standalone action for extracting metadata from Textract OCR results.
+ * Standalone action for extracting legal metadata from Textract OCR results.
  * Can be used independently of the main pipeline or integrated into other workflows.
+ *
+ * Extracts comprehensive legal metadata including:
+ * - Legal citations (statutes, case numbers, ECLI, Narodne Novine)
+ * - Legal entities (courts, parties, judges)
+ * - Document classification (type, jurisdiction)
+ * - Dates and key legal phrases
  *
  * Usage:
  *   $metadata = ExtractDocumentMetadata::run($driveFileId);
@@ -23,18 +29,18 @@ class ExtractDocumentMetadata
     use AsAction;
 
     public function __construct(
-        private DocumentMetadataExtractor $extractor
+        private LegalMetadataExtractor $extractor
     ) {}
 
     /**
-     * Extract metadata for a given Drive file.
+     * Extract legal metadata for a given Drive file.
      *
      * @param string $driveFileId The Google Drive file ID
      * @param bool $saveToJob Whether to save metadata to the TextractJob record
-     * @return DocumentMetadata
+     * @return LegalDocumentMetadata
      * @throws \RuntimeException
      */
-    public function handle(string $driveFileId, bool $saveToJob = false): DocumentMetadata
+    public function handle(string $driveFileId, bool $saveToJob = false): LegalDocumentMetadata
     {
         Log::info('ExtractDocumentMetadata: starting', compact('driveFileId', 'saveToJob'));
 
@@ -55,7 +61,7 @@ class ExtractDocumentMetadata
             );
         }
 
-        // Extract metadata
+        // Extract legal metadata
         $metadata = $this->extractor->extractFromJson(
             $jsonPath,
             $driveFileId,
@@ -70,8 +76,10 @@ class ExtractDocumentMetadata
 
         Log::info('ExtractDocumentMetadata: completed', [
             'driveFileId' => $driveFileId,
-            'pageCount' => $metadata->pageCount,
-            'totalLines' => $metadata->totalLines,
+            'documentType' => $metadata->documentType,
+            'totalCitations' => $metadata->totalCitations,
+            'courts' => count($metadata->courts),
+            'parties' => count($metadata->parties),
         ]);
 
         return $metadata;

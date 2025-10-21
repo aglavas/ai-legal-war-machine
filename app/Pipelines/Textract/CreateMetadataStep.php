@@ -2,21 +2,27 @@
 
 namespace App\Pipelines\Textract;
 
-use App\Services\Ocr\DocumentMetadataExtractor;
+use App\Services\Ocr\LegalMetadataExtractor;
 use Closure;
 
 /**
  * Step: CreateMetadataStep
- * Extract and store comprehensive metadata from the OCR document.
+ * Extract and store comprehensive legal metadata from the OCR document.
  * This step is detachable and can be run independently.
  *
+ * Extracts:
+ * - Legal citations (statutes, case numbers, ECLI, Narodne Novine)
+ * - Legal entities (courts, parties, judges)
+ * - Document classification (type, jurisdiction)
+ * - Dates and key legal phrases
+ *
  * Input payload keys: ocrDocument, driveFileId, driveFileName, job (optional)
- * Output payload adds: documentMetadata
+ * Output payload adds: legalMetadata
  */
 class CreateMetadataStep
 {
     public function __construct(
-        private DocumentMetadataExtractor $extractor
+        private LegalMetadataExtractor $extractor
     ) {}
 
     public function handle(array $payload, Closure $next): mixed
@@ -26,7 +32,7 @@ class CreateMetadataStep
             throw new \RuntimeException('OcrDocument not found in payload. CreateMetadataStep requires CollectLinesStep to run first.');
         }
 
-        // Extract metadata
+        // Extract legal metadata
         $metadata = $this->extractor->extract(
             document: $payload['ocrDocument'],
             driveFileId: $payload['driveFileId'] ?? null,
@@ -34,7 +40,7 @@ class CreateMetadataStep
         );
 
         // Add to payload
-        $payload['documentMetadata'] = $metadata;
+        $payload['legalMetadata'] = $metadata;
 
         // Optionally update job status
         if (isset($payload['job'])) {

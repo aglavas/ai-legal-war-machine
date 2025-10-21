@@ -3,13 +3,19 @@
 namespace App\Console\Commands;
 
 use App\Models\TextractJob;
-use App\Services\Ocr\DocumentMetadataExtractor;
+use App\Services\Ocr\LegalMetadataExtractor;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Storage;
 
 /**
- * Standalone command for extracting metadata from Textract results.
+ * Standalone command for extracting legal metadata from Textract results.
  * Can be run independently of the main pipeline.
+ *
+ * Extracts comprehensive legal metadata including:
+ * - Legal citations (statutes, case numbers, ECLI, Narodne Novine)
+ * - Legal entities (courts, parties, judges)
+ * - Document classification (type, jurisdiction)
+ * - Dates and key legal phrases
  *
  * Usage:
  *   php artisan textract:extract-metadata {driveFileId}
@@ -24,10 +30,10 @@ class TextractExtractMetadata extends Command
                             {--save-to-job : Save metadata to TextractJob record}
                             {--pretty : Pretty print JSON output}';
 
-    protected $description = 'Extract metadata from Textract OCR results (detachable pipeline step)';
+    protected $description = 'Extract legal metadata from Textract OCR results (detachable pipeline step)';
 
     public function __construct(
-        private DocumentMetadataExtractor $extractor
+        private LegalMetadataExtractor $extractor
     ) {
         parent::__construct();
     }
@@ -39,7 +45,7 @@ class TextractExtractMetadata extends Command
         $saveToJob = $this->option('save-to-job');
         $pretty = $this->option('pretty');
 
-        $this->info("Extracting metadata for Drive file: {$driveFileId}");
+        $this->info("Extracting legal metadata for Drive file: {$driveFileId}");
 
         // Find the TextractJob
         $job = TextractJob::where('drive_file_id', $driveFileId)->first();
@@ -63,7 +69,7 @@ class TextractExtractMetadata extends Command
         $this->info("Found JSON results at: {$jsonPath}");
 
         try {
-            // Extract metadata
+            // Extract legal metadata
             $metadata = $this->extractor->extractFromJson(
                 $jsonPath,
                 $driveFileId,
@@ -82,8 +88,8 @@ class TextractExtractMetadata extends Command
             // Save to file if output path specified
             if ($outputPath) {
                 $json = $pretty
-                    ? json_encode($metadata->toArray(), JSON_PRETTY_PRINT)
-                    : json_encode($metadata->toArray());
+                    ? json_encode($metadata->toArray(), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)
+                    : json_encode($metadata->toArray(), JSON_UNESCAPED_UNICODE);
 
                 file_put_contents($outputPath, $json);
                 $this->info("✓ Metadata saved to: {$outputPath}");
@@ -119,7 +125,12 @@ class TextractExtractMetadata extends Command
         $s3Key = "textract/json/{$driveFileId}.json";
         if (Storage::disk('s3')->exists($s3Key)) {
             // Download to temporary location
-            $tempPath = storage_path("app/temp/{$driveFileId}.json");
+            $tempDir = storage_path('app/temp');
+            if (!is_dir($tempDir)) {
+                mkdir($tempDir, 0755, true);
+            }
+
+            $tempPath = "{$tempDir}/{$driveFileId}.json";
             $content = Storage::disk('s3')->get($s3Key);
             file_put_contents($tempPath, $content);
             return $tempPath;
@@ -129,43 +140,100 @@ class TextractExtractMetadata extends Command
     }
 
     /**
-     * Display a summary of the extracted metadata.
+     * Display a summary of the extracted legal metadata.
      */
     private function displayMetadataSummary($metadata): void
     {
         $this->line('');
-        $this->info('=== Document Metadata Summary ===');
+        $this->info('=== Legal Document Metadata Summary ===');
         $this->line('');
 
+        // Document Classification
+        $this->table(
+            ['Property', 'Value'],
+            [
+                ['Document Type', $metadata->documentType ?? 'unknown'],
+                ['Jurisdiction', $metadata->jurisdiction ?? 'unknown'],
+                ['Classification Confidence', round($metadata->confidence * 100, 2) . '%'],
+            ]
+        );
+
+        // Citations
+        $this->line('');
+        $this->info('Legal Citations:');
+        $this->table(
+            ['Citation Type', 'Count'],
+            [
+                ['Statute Citations', count($metadata->statuteCitations)],
+                ['Case Number Citations', count($metadata->caseNumberCitations)],
+                ['ECLI Citations', count($metadata->ecliCitations)],
+                ['Narodne Novine Citations', count($metadata->narodneNovineCitations)],
+                ['Total Citations', $metadata->totalCitations],
+                ['Unique Laws Referenced', count($metadata->referencedLaws)],
+            ]
+        );
+
+        // Legal Entities
+        $this->line('');
+        $this->info('Legal Entities:');
+        $this->table(
+            ['Entity Type', 'Count'],
+            [
+                ['Courts', count($metadata->courts)],
+                ['Parties', count($metadata->parties)],
+                ['Dates', count($metadata->dates)],
+            ]
+        );
+
+        // Display sample citations
+        if (!empty($metadata->statuteCitations)) {
+            $this->line('');
+            $this->info('Sample Statute Citations:');
+            foreach (array_slice($metadata->statuteCitations, 0, 5) as $citation) {
+                $this->line('  • ' . ($citation['canonical'] ?? $citation['raw'] ?? 'N/A'));
+            }
+            if (count($metadata->statuteCitations) > 5) {
+                $this->line('  ... and ' . (count($metadata->statuteCitations) - 5) . ' more');
+            }
+        }
+
+        // Display courts
+        if (!empty($metadata->courts)) {
+            $this->line('');
+            $this->info('Courts Mentioned:');
+            foreach (array_slice($metadata->courts, 0, 5) as $court) {
+                $this->line('  • ' . ($court['normalized'] ?? $court['raw'] ?? 'N/A'));
+            }
+            if (count($metadata->courts) > 5) {
+                $this->line('  ... and ' . (count($metadata->courts) - 5) . ' more');
+            }
+        }
+
+        // Display parties
+        if (!empty($metadata->parties)) {
+            $this->line('');
+            $this->info('Parties Mentioned:');
+            foreach (array_slice($metadata->parties, 0, 5) as $party) {
+                $role = $party['role'] ?? 'party';
+                $this->line('  • ' . ($party['name'] ?? 'N/A') . " ({$role})");
+            }
+            if (count($metadata->parties) > 5) {
+                $this->line('  ... and ' . (count($metadata->parties) - 5) . ' more');
+            }
+        }
+
+        // Document Statistics
+        $this->line('');
+        $this->info('Document Statistics:');
         $this->table(
             ['Metric', 'Value'],
             [
                 ['Pages', $metadata->pageCount],
-                ['Total Lines', $metadata->totalLines],
-                ['Total Words', $metadata->totalWords],
-                ['Total Characters', $metadata->totalCharacters],
-                ['Signatures', $metadata->signatureCount],
-                ['Headers', $metadata->headerCount],
-                ['Bold Lines', "{$metadata->boldLineCount} ({$metadata->boldTextPercentage}%)"],
+                ['Words', number_format($metadata->wordCount)],
+                ['Paragraphs (estimated)', $metadata->paragraphCount],
+                ['OCR Quality', round($metadata->averageConfidence * 100, 2) . '%'],
             ]
         );
-
-        $this->line('');
-        $this->info('OCR Quality:');
-        $this->table(
-            ['Metric', 'Value'],
-            [
-                ['Average Confidence', round($metadata->averageConfidence * 100, 2) . '%'],
-                ['Min Confidence', round($metadata->minimumConfidence * 100, 2) . '%'],
-                ['Max Confidence', round($metadata->maximumConfidence * 100, 2) . '%'],
-                ['Low Confidence Lines', $metadata->lowConfidenceLineCount],
-                ['Low Confidence Pages', implode(', ', $metadata->lowConfidencePages) ?: 'None'],
-            ]
-        );
-
-        if (!empty($metadata->emptyPages)) {
-            $this->warn("Empty pages detected: " . implode(', ', $metadata->emptyPages));
-        }
 
         $this->line('');
     }
