@@ -14,6 +14,7 @@ use App\Pipelines\Textract\StartAnalysisStep;
 use App\Pipelines\Textract\WaitAndFetchStep;
 use App\Pipelines\Textract\SaveResultsStep;
 use App\Pipelines\Textract\CollectLinesStep;
+use App\Pipelines\Textract\CreateMetadataStep;
 use App\Pipelines\Textract\ReconstructPdfStep;
 use App\Pipelines\Textract\UploadOutputStep;
 use App\Pipelines\Textract\PersistReconstructedStep;
@@ -50,6 +51,7 @@ class ProcessDrivePdf
                     WaitAndFetchStep::class,
                     SaveResultsStep::class,
                     CollectLinesStep::class,
+                    CreateMetadataStep::class,  // New metadata extraction step
                     ReconstructPdfStep::class,
                     UploadOutputStep::class,
                     PersistReconstructedStep::class,
