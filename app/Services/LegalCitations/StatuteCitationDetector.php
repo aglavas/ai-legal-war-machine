@@ -18,7 +18,7 @@ class StatuteCitationDetector extends BaseCitationDetector
         }
 
         $results = $this->processMatches($matches, $text);
-        
+
         return $this->deduplicateByKey($results, 'canonical');
     }
 
@@ -28,34 +28,55 @@ class StatuteCitationDetector extends BaseCitationDetector
         $longNames = CroatianLawRegistry::getLongNameRegex();
 
         // Pattern 1: Law before article (e.g., "ZPP čl. 110 st. 2 toč. 3")
-        $p1 = '/\b(?P<law>' . $abbr . ')\s*,?\s*' . 
-              '(?:čl(?:\.|anak)?|cl(?:\.|anak)?)\s*' .
-              '(?P<article>\d+[a-z]?)\s*' .
-              '(?:[-–]\s*(?P<article_end>\d+[a-z]?))?\s*\.?\s*' .
-              $this->getSubdivisionPattern() . '/iu';
+        $p1 = '/\b(?P<law>' . $abbr . ')\s*,?\s*'
+            . '(?:čl(?:\.|anak|anka)?|cl(?:\.|anak|anka)?)\s*'
+            . '(?P<article>\d+[a-z]?)\s*'
+            . '(?:[-–]\s*(?P<article_end>\d+[a-z]?))?\s*\.?\s*'
+            . $this->getSubdivisionPattern() . '/iu';
 
-        // Pattern 2: Article before law (e.g., "članak 110. st. 2 ZPP")
-        $p2 = '/\b(?:čl(?:\.|anak)?|cl(?:\.|anak)?)\s*' .
-              '(?P<article>\d+[a-z]?)\s*' .
-              '(?:[-–]\s*(?P<article_end>\d+[a-z]?))?\s*\.?\s*' .
-              $this->getSubdivisionPattern() . '\s*' .
-              '(?P<law>' . $abbr . ')\b/iu';
+        // Pattern 2: Article before law abbreviation (e.g., "članak 110. st. 2 ZPP")
+        $p2 = '/\b(?:čl(?:\.|anak|anka)?|cl(?:\.|anak|anka)?)\s*'
+            . '(?P<article>\d+[a-z]?)\s*'
+            . '(?:[-–]\s*(?P<article_end>\d+[a-z]?))?\s*\.?\s*'
+            . $this->getSubdivisionPattern() . '\s*'
+            . '(?P<law>' . $abbr . ')\b/iu';
 
-        // Pattern 3: Long-name law + article
-        $p3 = '/\b(?P<law_long>' . $longNames . ')\s*,?\s*' .
-              '(?:čl(?:\.|anak)?|cl(?:\.|anak)?)\s*' .
-              '(?P<article>\d+[a-z]?)\s*' .
-              '(?:[-–]\s*(?P<article_end>\d+[a-z]?))?\s*\.?\s*' .
-              $this->getSubdivisionPattern() . '/iu';
+        // Pattern 3: Long-name law before article (e.g., "Kaznenog zakona, čl. 331 st. 1")
+        $p3 = '/\b(?P<law_long>' . $longNames . ')\s*,?\s*'
+            . '(?:čl(?:\.|anak|anka)?|cl(?:\.|anak|anka)?)\s*'
+            . '(?P<article>\d+[a-z]?)\s*'
+            . '(?:[-–]\s*(?P<article_end>\d+[a-z]?))?\s*\.?\s*'
+            . $this->getSubdivisionPattern() . '/iu';
 
-        return [$p1, $p2, $p3];
+        // Pattern 4: Article before long-name law (e.g., "članak 272. st. 1. Zakona o kaznenom postupku")
+        $p4 = '/\b(?:čl(?:\.|anak|anka)?|cl(?:\.|anak|anka)?)\s*'
+            . '(?P<article>\d+[a-z]?)\s*'
+            . '(?:[-–]\s*(?P<article_end>\d+[a-z]?))?\s*\.?\s*'
+            . $this->getSubdivisionPattern() . '\s*'
+            . '(?P<law_long>' . $longNames . ')\b/iu';
+
+        // Pattern 5: Article and subdivisions without law (e.g., "čl. 331. st.1.")
+        $p5 = '/\b(?:čl(?:\.|anak|anka)?|cl(?:\.|anak|anka)?)\s*'
+            . '(?P<article>\d+[a-z]?)\s*\.?\s*'
+            . $this->getSubdivisionPattern() . '/iu';
+
+        return [$p1, $p2, $p3, $p4, $p5];
     }
 
     private function getSubdivisionPattern(): string
     {
-        return '(?:(?:st(?:\.|avak|av)?)\s*(?P<paragraph>\d+)\.?)?\s*' .
-               '(?:(?:toč(?:\.|ka)?|t(?:\.|oč\.?)?)\s*(?P<item>\d+)\.?)?\s*' .
-               '(?:(?:al(?:\.|ineja)?)\s*(?P<alineja>\d+)\.?)?';
+        // Support single or list forms like: "st. 1.", "st.1. i st.3.", "st. 1, 2 i 3"; similarly for toč./t.
+        $sep = '(?:\s*,\s*|\s*i\s*)';
+
+        $paragraphs = '(?:(?:st(?:\.|avak|av)?)\s*(?P<paragraphs>\d+\.?'
+                    . '(?:' . $sep . '(?:st(?:\.|avak|av)?)?\s*\d+\.?)*)\s*)?';
+
+        $items = '(?:(?:toč(?:\.|ka)?|t(?:\.|oč\.?)?)\s*(?P<items>\d+\.?'
+               . '(?:' . $sep . '(?:toč(?:\.|ka)?|t(?:\.|oč\.?)?)?\s*\d+\.?)*)\s*)?';
+
+        $alineja = '(?:(?:al(?:\.|ineja)?)\s*(?P<alineja>\d+)\.?\s*)?';
+
+        return $paragraphs . '\s*' . $items . '\s*' . $alineja;
     }
 
     private function processMatches(array $matches, string $text): array
@@ -65,31 +86,41 @@ class StatuteCitationDetector extends BaseCitationDetector
         foreach ($matches as $match) {
             $lawRaw = $match['law'][0] ?? ($match['law_long'][0] ?? null);
             $law = CroatianLawRegistry::normalizeLaw($lawRaw);
-            
-            $article = isset($match['article'][0]) 
-                ? mb_strtolower(trim($match['article'][0]), 'UTF-8') 
-                : null;
-                
-            $articleEnd = isset($match['article_end'][0]) 
-                ? mb_strtolower(trim($match['article_end'][0]), 'UTF-8') 
+
+            $article = isset($match['article'][0])
+                ? mb_strtolower(trim($match['article'][0]), 'UTF-8')
                 : null;
 
-            $paragraph = $this->normInt($match['paragraph'][0] ?? null);
-            $item = $this->normInt($match['item'][0] ?? null);
+            $articleEnd = isset($match['article_end'][0])
+                ? mb_strtolower(trim($match['article_end'][0]), 'UTF-8')
+                : null;
+
+            // Parse potential lists of paragraphs/items
+            $paragraphsList = $this->parseNumberList($match['paragraphs'][0] ?? null);
+            $itemsList = $this->parseNumberList($match['items'][0] ?? null);
+
             $alineja = $this->normInt($match['alineja'][0] ?? null);
 
             $articles = $this->expandArticleRange($article, $articleEnd);
 
+            // If no lists provided, keep null to avoid expanding
+            $paragraphsList = !empty($paragraphsList) ? $paragraphsList : [null];
+            $itemsList = !empty($itemsList) ? $itemsList : [null];
+
             foreach ($articles as $a) {
-                $results[] = [
-                    'raw' => $match[0][0] ?? '',
-                    'law' => $law,
-                    'article' => $a,
-                    'paragraph' => $paragraph,
-                    'item' => $item,
-                    'alineja' => $alineja,
-                    'canonical' => $this->buildCanonical($law, $a, $paragraph, $item, $alineja),
-                ];
+                foreach ($paragraphsList as $paragraph) {
+                    foreach ($itemsList as $item) {
+                        $results[] = [
+                            'raw' => $match[0][0] ?? '',
+                            'law' => $law,
+                            'article' => $a,
+                            'paragraph' => $paragraph,
+                            'item' => $item,
+                            'alineja' => $alineja,
+                            'canonical' => $this->buildCanonical($law, $a, $paragraph, $item, $alineja),
+                        ];
+                    }
+                }
             }
         }
 
@@ -123,11 +154,16 @@ class StatuteCitationDetector extends BaseCitationDetector
 
     private function buildCanonical(?string $law, ?string $article, ?string $paragraph, ?string $item, ?string $alineja): ?string
     {
-        if (!$law || !$article) {
+        if (!$article) {
             return null;
         }
 
-        $parts = ["{$law}:čl.{$article}"];
+        $parts = [];
+        if ($law) {
+            $parts[] = "{$law}:čl.{$article}";
+        } else {
+            $parts[] = "čl.{$article}";
+        }
 
         if ($paragraph) {
             $parts[] = "st.{$paragraph}";
@@ -140,5 +176,28 @@ class StatuteCitationDetector extends BaseCitationDetector
         }
 
         return implode(' ', $parts);
+    }
+
+    private function parseNumberList(?string $text): array
+    {
+        if (!$text) {
+            return [];
+        }
+        // Extract all integers, e.g., from "1., 2. i 3" or "st.1. i st.3."
+        if (preg_match_all('/\d+/', $text, $m)) {
+            // Preserve order and uniqueness
+            $seen = [];
+            $out = [];
+            foreach ($m[0] as $num) {
+                $n = ltrim($num, '0');
+                $n = $n === '' ? '0' : $n; // keep single zero if any
+                if (!isset($seen[$n])) {
+                    $seen[$n] = true;
+                    $out[] = $n;
+                }
+            }
+            return $out;
+        }
+        return [];
     }
 }

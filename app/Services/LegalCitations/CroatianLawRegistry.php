@@ -5,15 +5,18 @@ namespace App\Services\LegalCitations;
 class CroatianLawRegistry
 {
     public const LAW_ABBREVIATIONS = [
-        'ZPP', 'ZKP', 'ZOO', 'OZ', 'ZTD', 'ZUP', 'ZUS', 
-        'KZ', 'ZK', 'ZJN', 'ZZK', 'ZSPC', 'ZIS', 'ZDO', 
+        'ZPP', 'ZKP', 'ZOO', 'OZ', 'ZTD', 'ZUP', 'ZUS',
+        'KZ', 'ZK', 'ZJN', 'ZZK', 'ZSPC', 'ZIS', 'ZDO',
         'ZDR', 'ZOR', 'ZPD',
     ];
 
     public const LAW_NAME_TO_ABBREV = [
         'zakon o parničnom postupku' => 'ZPP',
+        'zakona o parničnom postupku' => 'ZPP',
         'zakon o kaznenom postupku' => 'ZKP',
+        'zakona o kaznenom postupku' => 'ZKP',
         'kazneni zakon' => 'KZ',
+        'kaznenog zakona' => 'KZ',
         'zakon o obveznim odnosima' => 'ZOO',
         'ovršni zakon' => 'OZ',
         'zakon o upravnom postupku' => 'ZUP',
@@ -25,10 +28,10 @@ class CroatianLawRegistry
     public static function getAbbreviationRegex(): string
     {
         $escaped = array_map(
-            fn($s) => preg_quote($s, '/'), 
+            fn($s) => preg_quote($s, '/'),
             self::LAW_ABBREVIATIONS
         );
-        
+
         return '(?:' . implode('|', $escaped) . ')';
     }
 
@@ -46,7 +49,7 @@ class CroatianLawRegistry
             return $upper;
         }
 
-        // Try to find in long names map
+        // Try to find in long names map (including genitive variants)
         foreach (self::LAW_NAME_TO_ABBREV as $name => $abbr) {
             if (strpos($lower, $name) !== false) {
                 return $abbr;
@@ -60,10 +63,10 @@ class CroatianLawRegistry
     public static function getLongNameRegex(): string
     {
         $names = array_map(
-            fn($n) => preg_quote($n, '/'), 
+            fn($n) => preg_quote($n, '/'),
             array_keys(self::LAW_NAME_TO_ABBREV)
         );
-        
+
         return implode('|', $names);
     }
 }

@@ -6,6 +6,7 @@ use App\Services\HrLegalCitationsDetector;
 use App\Services\LegalMetadata\CourtDetector;
 use App\Services\LegalMetadata\PartyDetector;
 use App\Services\LegalMetadata\DocumentTypeClassifier;
+use App\Services\LegalMetadata\KeyPhraseExtractor;
 use Illuminate\Support\Facades\Log;
 
 /**
@@ -21,6 +22,7 @@ class LegalMetadataExtractor
         private CourtDetector $courtDetector,
         private PartyDetector $partyDetector,
         private DocumentTypeClassifier $documentClassifier,
+        private KeyPhraseExtractor $keyPhraseExtractor,
     ) {}
 
     /**
@@ -83,8 +85,8 @@ class LegalMetadataExtractor
         $metadata->jurisdiction = $classification['jurisdiction'];
         $metadata->confidence = $classification['confidence'];
 
-        // Extract key legal phrases
-        $metadata->keyPhrases = $this->extractKeyPhrases($fullText);
+        // Extract key legal phrases (diacritics-insensitive, with counts and context)
+        $metadata->keyPhrases = $this->keyPhraseExtractor->extract($fullText);
 
         // Calculate document statistics
         $metadata->pageCount = count($document->pages);
@@ -164,39 +166,6 @@ class LegalMetadataExtractor
         return $laws;
     }
 
-    /**
-     * Extract key legal phrases from text.
-     * These are important terms that appear in legal documents.
-     */
-    private function extractKeyPhrases(string $text): array
-    {
-        $keyPhrases = [
-            'in the name of the republic' => 'u ime republike hrvatske',
-            'in the name of the people' => 'u ime naroda',
-            'hereby decides' => 'odlučuje se',
-            'hereby orders' => 'nalaže se',
-            'legal remedy' => 'pravni lijek',
-            'final decision' => 'pravomoćna odluka',
-            'enforcement' => 'izvršenje',
-            'appeal' => 'žalba',
-            'revision' => 'revizija',
-            'cassation' => 'kasacija',
-        ];
-
-        $found = [];
-        $textLower = mb_strtolower($text, 'UTF-8');
-
-        foreach ($keyPhrases as $key => $phrase) {
-            if (str_contains($textLower, mb_strtolower($phrase, 'UTF-8'))) {
-                $found[] = [
-                    'key' => $key,
-                    'phrase' => $phrase,
-                ];
-            }
-        }
-
-        return $found;
-    }
 
     /**
      * Count paragraphs (rough estimate based on page structure).

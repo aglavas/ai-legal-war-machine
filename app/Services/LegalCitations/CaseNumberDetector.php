@@ -5,10 +5,10 @@ namespace App\Services\LegalCitations;
 class CaseNumberDetector extends BaseCitationDetector
 {
     private const KNOWN_PREFIXES = [
-        'Rev', 'Revr', 'Revt', 'Revd', 'Gž', 'Gžp', 'Gžn', 'Gžr', 
-        'Pž', 'Kž', 'Kžm', 'Kžg', 'U-III', 'U-II', 'U-I', 
-        'Usž', 'Us', 'UP', 'Pp', 'Pn', 'Pr', 'Gpp', 'Gzp', 
-        'Gžzp', 'Psp',
+        'Rev', 'Revr', 'Revt', 'Revd', 'Gž', 'Gžp', 'Gžn', 'Gžr',
+        'Pž', 'Kž', 'Kžm', 'Kžg', 'U-III', 'U-II', 'U-I',
+        'Usž', 'Us', 'UP', 'Pp', 'Pp Prz', 'Pn', 'Pr', 'Gpp', 'Gzp',
+        'Gžzp', 'Psp', 'KP-DO', 'Kis', 'KIS'
     ];
 
     public function detect(string $text): array
@@ -44,7 +44,7 @@ class CaseNumberDetector extends BaseCitationDetector
     private function getPatterns(): array
     {
         $prefixAlt = implode('|', array_map(
-            fn($s) => preg_quote($s, '/'), 
+            fn($s) => preg_quote($s, '/'),
             self::KNOWN_PREFIXES
         ));
 
