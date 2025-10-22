@@ -417,9 +417,12 @@
             </div>
         </div>
     @endif
-</div>
 
-<style>
+    {{-- Toast Container --}}
+    <div id="toast-container" class="toast-container"></div>
+
+    @push('head')
+    <style>
     .toast-container {
         position: fixed;
         top: 20px;
@@ -538,11 +541,11 @@
         transition: transform 0.2s ease;
         color: var(--muted);
     }
-</style>
+    </style>
+    @endpush
 
-<div id="toast-container" class="toast-container"></div>
-
-<script>
+    @push('scripts')
+    <script>
     document.addEventListener('livewire:init', () => {
         function showToast(message, type = 'success') {
             const container = document.getElementById('toast-container');
@@ -580,4 +583,6 @@
             showToast(msg, 'error');
         });
     });
-</script>
+    </script>
+    @endpush
+</div>
