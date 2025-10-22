@@ -32,7 +32,7 @@ class AppServiceProvider extends ServiceProvider
         Livewire::component('openai-vector-manager', OpenAIVectorManager::class);
         Livewire::component('openai-log-viewer', OpenAILogViewer::class);
         Livewire::component('gup-timeline', GupTimeline::class);
-        Livewire::component('ingested-law-manager', IngestedLawsManager::class);
+        Livewire::component('ingested-laws-manager', IngestedLawsManager::class);
         Livewire::component('transcript-previewer', TranscriptPreviewer::class);
         Livewire::component('textract-manager', TextractManager::class);
         Livewire::component('epredmet-widget', EpredmetWidget::class);
