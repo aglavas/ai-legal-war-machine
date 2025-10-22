@@ -14,7 +14,7 @@ Route::get('/comparative-timeline', \App\Http\Livewire\GupTimeline::class);;
 Route::view('/openai/logs', 'openai-logs');
 Route::view('/openai/responses', 'openai-responses')->name('openai.responses');
 
-Route::get('/ingested-laws', \App\Http\Livewire\IngestedLawsManager::class)->name('ingested-laws.index');
+Route::view('/ingested-laws', 'ingested-laws')->name('ingested-laws.index');
 Route::view('/dashboard', 'dashboard')->name('dashboard');
 Route::get('/evidence/asset', EvidenceAssetController::class)
     ->middleware('signed')

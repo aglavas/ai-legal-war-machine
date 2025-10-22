@@ -379,6 +379,6 @@ class IngestedLawsManager extends Component
             'selected' => $selected,
             'laws' => $laws,
             'uploads' => $uploads,
-        ])->layout('components.layouts.app', ['title' => 'Ingested Laws Manager']);
+        ]);
     }
 }
