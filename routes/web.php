@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\EvidenceAssetController;
+use App\Http\Controllers\McpHttpController;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/', function () {
@@ -28,3 +29,9 @@ Route::view('/textract', 'textract')->name('textract.manager');
 
 // e-Oglasna monitoring dashboard
 Route::get('/eoglasna', \App\Http\Livewire\EoglasnaMonitoring::class)->name('eoglasna.monitoring');
+
+// MCP HTTP Endpoint - for Vizra ADK agents (OdlukeAgent) and external MCP clients
+Route::prefix('mcp')->group(function () {
+    Route::post('/message', [McpHttpController::class, 'message'])->name('mcp.message');
+    Route::get('/info', [McpHttpController::class, 'info'])->name('mcp.info');
+});
