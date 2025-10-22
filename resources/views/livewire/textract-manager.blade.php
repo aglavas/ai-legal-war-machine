@@ -164,7 +164,7 @@
                         ];
                         $style = $statusStyles[$job->status] ?? ['class' => '', 'icon' => '•'];
                     @endphp
-                    <li class="seg job-card {{ $isExpanded ? 'expanded' : 'collapsed' }}">
+                    <li class="seg job-card {{ $isExpanded ? 'expanded' : 'collapsed' }}" wire:key="job-{{ $job->id }}">
                         <div class="head" style="cursor: pointer;" wire:click="toggleJobCard({{ $job->id }})">
                             <span class="expand-icon" style="font-size:16px; margin-right:4px;">
                                 {{ $isExpanded ? '▼' : '▶' }}
