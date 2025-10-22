@@ -95,8 +95,14 @@
             <span>Auto-refresh</span>
         </label>
 
-        <button type="button" class="btn" wire:click="refreshJobs">🔄 Refresh</button>
-        <button type="button" class="btn info" wire:click="syncFromDrive">📥 Sync from Drive</button>
+        <button type="button" class="btn" wire:click="refreshJobs" wire:loading.attr="disabled">
+            <span wire:loading.remove wire:target="refreshJobs">🔄 Refresh</span>
+            <span wire:loading wire:target="refreshJobs">🔄 Refreshing...</span>
+        </button>
+        <button type="button" class="btn info" wire:click="syncFromDrive" wire:loading.attr="disabled" wire:target="syncFromDrive">
+            <span wire:loading.remove wire:target="syncFromDrive">📥 Sync from Drive</span>
+            <span wire:loading wire:target="syncFromDrive">⏳ Syncing...</span>
+        </button>
         @if($search)
             <button type="button" class="btn" wire:click="$set('search','')">Clear Search</button>
         @endif
@@ -124,7 +130,13 @@
                         @endforeach
                     </select>
                 </div>
-                <button type="button" class="btn success" wire:click="processManual">🚀 Queue Job</button>
+                <button type="button" class="btn success"
+                        wire:click="processManual"
+                        wire:loading.attr="disabled"
+                        wire:target="processManual">
+                    <span wire:loading.remove wire:target="processManual">🚀 Queue Job</span>
+                    <span wire:loading wire:target="processManual">⏳ Queueing...</span>
+                </button>
             </div>
         </div>
     </details>
@@ -139,37 +151,47 @@
         @else
             <ul class="seg-list">
                 @foreach($jobs as $job)
-                    <li class="seg">
-                        <div class="head">
-                            <span class="chip" style="flex:1; max-width:600px; overflow:hidden; text-overflow:ellipsis; font-size:14px"
-                                  title="{{ $job->drive_file_name }}">
-                                📄 {{ \Illuminate\Support\Str::limit($job->drive_file_name, 60) }}
+                    @php
+                        $isExpanded = isset($expandedJobs[$job->id]);
+                        $statusStyles = [
+                            'queued' => ['class' => 'warn', 'icon' => '⏳'],
+                            'uploading' => ['class' => 'info', 'icon' => '📤'],
+                            'started' => ['class' => 'info', 'icon' => '🔄'],
+                            'analyzing' => ['class' => 'info', 'icon' => '🔍'],
+                            'reconstructing' => ['class' => 'info', 'icon' => '🔧'],
+                            'succeeded' => ['class' => 'success', 'icon' => '✅'],
+                            'failed' => ['class' => 'error', 'icon' => '❌'],
+                        ];
+                        $style = $statusStyles[$job->status] ?? ['class' => '', 'icon' => '•'];
+                    @endphp
+                    <li class="seg job-card {{ $isExpanded ? 'expanded' : 'collapsed' }}">
+                        <div class="head" style="cursor: pointer;" wire:click="toggleJobCard({{ $job->id }})">
+                            <span class="expand-icon" style="font-size:16px; margin-right:4px;">
+                                {{ $isExpanded ? '▼' : '▶' }}
                             </span>
-
-                            @php
-                                $statusStyles = [
-                                    'queued' => ['class' => 'warn', 'icon' => '⏳'],
-                                    'uploading' => ['class' => 'info', 'icon' => '📤'],
-                                    'started' => ['class' => 'info', 'icon' => '🔄'],
-                                    'analyzing' => ['class' => 'info', 'icon' => '🔍'],
-                                    'reconstructing' => ['class' => 'info', 'icon' => '🔧'],
-                                    'succeeded' => ['class' => 'success', 'icon' => '✅'],
-                                    'failed' => ['class' => 'error', 'icon' => '❌'],
-                                ];
-                                $style = $statusStyles[$job->status] ?? ['class' => '', 'icon' => '•'];
-                            @endphp
+                            <span class="chip" style="flex:1; max-width:500px; overflow:hidden; text-overflow:ellipsis; font-size:13px"
+                                  title="{{ $job->drive_file_name }}">
+                                📄 {{ \Illuminate\Support\Str::limit($job->drive_file_name, 50) }}
+                            </span>
 
                             <span class="chip {{ $style['class'] }}">
                                 {{ $style['icon'] }} {{ ucfirst($job->status) }}
                             </span>
+
+                            @if($job->case_id)
+                                <span class="chip info" style="font-size:11px" title="Case ID: {{ $job->case_id }}">📁</span>
+                            @endif
 
                             <span class="chip" style="font-size:11px" title="{{ $job->updated_at }}">
                                 🕒 {{ $job->updated_at->diffForHumans() }}
                             </span>
                         </div>
 
+                        {{-- Expandable content --}}
+                        <div class="job-details" style="display: {{ $isExpanded ? 'block' : 'none' }}; margin-top:12px;">
+
                         {{-- Case selection & current case --}}
-                        <div class="head" style="margin-top:10px; gap:8px; align-items:center">
+                        <div class="head" style="gap:8px; align-items:center">
                             <div class="ctrl" style="min-width:320px; margin:0">
                                 <label style="font-size:12px; color:#94a3b8">Attach to Case</label>
                                 <select class="in small" wire:model="selectedCaseForJob.{{ $job->id }}">
@@ -203,28 +225,42 @@
                             </button>
 
                             @if(in_array($job->status, ['queued', 'failed']))
-                                <button type="button" class="btn success" wire:click="processJob({{ $job->id }})"
+                                <button type="button" class="btn success"
+                                        wire:click="processJob({{ $job->id }})"
+                                        wire:loading.attr="disabled"
+                                        wire:target="processJob"
                                         @disabled(!$job->case_id)
                                         style="font-size:12px; padding:6px 12px">
-                                    🚀 Process (Async)
+                                    <span wire:loading.remove wire:target="processJob">🚀 Process (Async)</span>
+                                    <span wire:loading wire:target="processJob">⏳ Processing...</span>
                                 </button>
-                                <button type="button" class="btn info" wire:click="processJob({{ $job->id }}, true)"
+                                <button type="button" class="btn info"
+                                        wire:click="processJob({{ $job->id }}, true)"
+                                        wire:loading.attr="disabled"
+                                        wire:target="processJob"
                                         @disabled(!$job->case_id)
                                         style="font-size:12px; padding:6px 12px">
-                                    ⚡ Process (Sync)
+                                    <span wire:loading.remove wire:target="processJob">⚡ Process (Sync)</span>
+                                    <span wire:loading wire:target="processJob">⏳ Processing...</span>
                                 </button>
                             @endif
 
                             @if($job->status === 'failed')
-                                <button type="button" class="btn warn" wire:click="retryJob({{ $job->id }})"
+                                <button type="button" class="btn warn"
+                                        wire:click="retryJob({{ $job->id }})"
+                                        wire:loading.attr="disabled"
+                                        wire:target="retryJob"
                                         style="font-size:12px; padding:6px 12px">
-                                    🔄 Retry
+                                    <span wire:loading.remove wire:target="retryJob">🔄 Retry</span>
+                                    <span wire:loading wire:target="retryJob">⏳ Retrying...</span>
                                 </button>
                             @endif
 
                             <button type="button" class="btn error"
                                     wire:click="deleteJob({{ $job->id }})"
                                     wire:confirm="Are you sure you want to delete this job?"
+                                    wire:loading.attr="disabled"
+                                    wire:target="deleteJob"
                                     style="font-size:12px; padding:6px 12px">
                                 🗑️ Delete
                             </button>
@@ -241,6 +277,7 @@
                                 <span style="font-family:monospace">{{ \Illuminate\Support\Str::limit($job->s3_key, 70) }}</span>
                             @endif
                         </div>
+                        </div>{{-- End job-details --}}
                     </li>
                 @endforeach
             </ul>
@@ -382,18 +419,165 @@
     @endif
 </div>
 
+<style>
+    .toast-container {
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        z-index: 9999;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        max-width: 400px;
+    }
+    .toast {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 16px 20px;
+        box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        animation: slideIn 0.3s ease-out;
+        min-width: 320px;
+    }
+    .toast.success {
+        border-left: 4px solid var(--success);
+    }
+    .toast.error {
+        border-left: 4px solid var(--error);
+    }
+    .toast-icon {
+        font-size: 24px;
+        flex-shrink: 0;
+    }
+    .toast-content {
+        flex: 1;
+    }
+    .toast-message {
+        color: var(--fg);
+        font-size: 14px;
+        line-height: 1.5;
+    }
+    .toast-close {
+        background: transparent;
+        border: none;
+        color: var(--muted);
+        cursor: pointer;
+        font-size: 20px;
+        padding: 0;
+        width: 24px;
+        height: 24px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 4px;
+        transition: all 0.2s ease;
+    }
+    .toast-close:hover {
+        background: rgba(255,255,255,0.1);
+        color: var(--fg);
+    }
+    @keyframes slideIn {
+        from {
+            transform: translateX(400px);
+            opacity: 0;
+        }
+        to {
+            transform: translateX(0);
+            opacity: 1;
+        }
+    }
+    @keyframes slideOut {
+        from {
+            transform: translateX(0);
+            opacity: 1;
+        }
+        to {
+            transform: translateX(400px);
+            opacity: 0;
+        }
+    }
+    .toast.removing {
+        animation: slideOut 0.3s ease-in forwards;
+    }
+
+    /* Loading spinner */
+    .spinner {
+        display: inline-block;
+        width: 14px;
+        height: 14px;
+        border: 2px solid rgba(255, 255, 255, 0.3);
+        border-radius: 50%;
+        border-top-color: #fff;
+        animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin {
+        to { transform: rotate(360deg); }
+    }
+
+    /* Disabled button styles */
+    .btn:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+        filter: grayscale(0.3);
+    }
+
+    /* Job card transitions */
+    .job-card {
+        transition: all 0.2s ease;
+    }
+    .job-card.collapsed {
+        padding: 10px 14px;
+    }
+    .job-card.expanded {
+        padding: 14px 16px;
+    }
+    .expand-icon {
+        transition: transform 0.2s ease;
+        color: var(--muted);
+    }
+</style>
+
+<div id="toast-container" class="toast-container"></div>
+
 <script>
     document.addEventListener('livewire:init', () => {
+        function showToast(message, type = 'success') {
+            const container = document.getElementById('toast-container');
+            const toast = document.createElement('div');
+            toast.className = `toast ${type}`;
+
+            const icon = type === 'success' ? '✅' : '❌';
+
+            toast.innerHTML = `
+                <div class="toast-icon">${icon}</div>
+                <div class="toast-content">
+                    <div class="toast-message">${message}</div>
+                </div>
+                <button class="toast-close" onclick="this.parentElement.remove()">×</button>
+            `;
+
+            container.appendChild(toast);
+
+            // Auto remove after 5 seconds
+            setTimeout(() => {
+                toast.classList.add('removing');
+                setTimeout(() => toast.remove(), 300);
+            }, 5000);
+        }
+
         Livewire.on('success', (event) => {
             const msg = event.message || 'Success';
             console.log('✅', msg);
-            // You can add a toast notification library here
-            alert('✅ ' + msg);
+            showToast(msg, 'success');
         });
+
         Livewire.on('error', (event) => {
             const msg = event.message || 'Error occurred';
             console.error('❌', msg);
-            alert('❌ ' + msg);
+            showToast(msg, 'error');
         });
     });
 </script>

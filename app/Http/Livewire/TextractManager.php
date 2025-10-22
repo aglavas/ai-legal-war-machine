@@ -33,6 +33,9 @@ class TextractManager extends Component
     public ?int $selectedJobId = null;
     public ?array $selectedJobData = null;
 
+    // Expandable cards
+    public array $expandedJobs = [];
+
     protected $queryString = [
         'search' => ['except' => ''],
         'statusFilter' => ['except' => 'all'],
@@ -272,6 +275,15 @@ class TextractManager extends Component
     {
         $this->selectedJobId = null;
         $this->selectedJobData = null;
+    }
+
+    public function toggleJobCard(int $jobId): void
+    {
+        if (isset($this->expandedJobs[$jobId])) {
+            unset($this->expandedJobs[$jobId]);
+        } else {
+            $this->expandedJobs[$jobId] = true;
+        }
     }
 
     public function downloadTextractJson(int $jobId): void
