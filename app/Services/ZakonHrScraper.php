@@ -193,4 +193,140 @@ class ZakonHrScraper
             'categories' => $categoriesData,
         ];
     }
+
+    /**
+     * Scrape the full content of a specific law page
+     *
+     * @param string $url The law URL to scrape
+     * @return array
+     */
+    public function scrapeLawContent(string $url): array
+    {
+        $response = Http::timeout(60)
+            ->withHeaders([
+                'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Accept' => 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'Accept-Language' => 'hr-HR,hr;q=0.9,en-US;q=0.8,en;q=0.7',
+            ])
+            ->get($url);
+
+        if (!$response->successful()) {
+            throw new \Exception("Failed to fetch law content from: {$url}. Status: {$response->status()}");
+        }
+
+        $html = $response->body();
+        $crawler = new Crawler($html);
+
+        $content = [];
+        $metadata = [];
+
+        // Extract the main law title
+        $titleNode = $crawler->filter('h1, h2.naslov-zakona, .naslov-zakona');
+        $title = $titleNode->count() > 0 ? trim($titleNode->first()->text()) : '';
+
+        // Extract law metadata (number, date, etc.)
+        $metaNode = $crawler->filter('.meta-zakon, .podaci-zakon, .metadata');
+        if ($metaNode->count() > 0) {
+            $metadata['raw_meta'] = trim($metaNode->first()->text());
+        }
+
+        // Extract the main law text content
+        // Try multiple selectors as the structure might vary
+        $contentSelectors = [
+            'div.tekst-zakona',
+            'div.law-content',
+            'div.content',
+            'article',
+            'div.main-content',
+        ];
+
+        $lawText = '';
+        foreach ($contentSelectors as $selector) {
+            $contentNode = $crawler->filter($selector);
+            if ($contentNode->count() > 0) {
+                // Get the HTML content and clean it up
+                $lawText = $contentNode->first()->html();
+                break;
+            }
+        }
+
+        // If no specific content div found, try to get all paragraph text
+        if (empty($lawText)) {
+            $crawler->filter('p')->each(function (Crawler $node) use (&$lawText) {
+                $lawText .= $node->text() . "\n\n";
+            });
+        }
+
+        // Extract articles/sections if present
+        $articles = [];
+        $crawler->filter('.clanak, article.law-article, div[id^="cl"], div[class*="article"]')->each(function (Crawler $node, $i) use (&$articles) {
+            $articleTitle = '';
+            $articleContent = '';
+
+            // Try to find article title
+            $titleNode = $node->filter('h3, h4, strong, .article-title');
+            if ($titleNode->count() > 0) {
+                $articleTitle = trim($titleNode->first()->text());
+            }
+
+            // Get article content
+            $articleContent = trim($node->text());
+
+            if (!empty($articleContent)) {
+                $articles[] = [
+                    'index' => $i,
+                    'title' => $articleTitle,
+                    'content' => $articleContent,
+                ];
+            }
+        });
+
+        // Clean up the law text
+        $lawText = strip_tags($lawText, '<p><br><strong><em><ul><li><ol><h1><h2><h3><h4>');
+        $lawText = preg_replace('/\s+/', ' ', $lawText);
+        $lawText = trim($lawText);
+
+        return [
+            'url' => $url,
+            'title' => $title,
+            'content' => $lawText,
+            'articles' => $articles,
+            'metadata' => $metadata,
+            'scraped_at' => now()->toIso8601String(),
+            'content_length' => mb_strlen($lawText),
+        ];
+    }
+
+    /**
+     * Scrape content for multiple laws
+     *
+     * @param array $urls Array of law URLs to scrape
+     * @return array
+     */
+    public function scrapeLawsContent(array $urls): array
+    {
+        $results = [];
+
+        foreach ($urls as $url) {
+            try {
+                $results[$url] = $this->scrapeLawContent($url);
+                $results[$url]['status'] = 'success';
+
+                // Add a small delay to avoid overwhelming the server
+                usleep(500000); // 0.5 second delay
+            } catch (\Exception $e) {
+                Log::error("Failed to scrape law content", [
+                    'url' => $url,
+                    'error' => $e->getMessage(),
+                ]);
+                $results[$url] = [
+                    'url' => $url,
+                    'status' => 'error',
+                    'error' => $e->getMessage(),
+                ];
+            }
+        }
+
+        return $results;
+    }
 }

@@ -442,13 +442,16 @@
                 @if(empty($scrapedLaws))
                     <div class="seg" style="margin-bottom:16px">
                         <div class="text-sm" style="line-height:1.6">
-                            <strong>How it works:</strong>
+                            <strong>📋 Step 1: Fetch Available Laws</strong>
                             <ul style="margin:8px 0 0 20px; padding:0">
-                                <li>Scrapes laws from zakon.hr categories (98, 99, 100, 101)</li>
-                                <li>Extracts law titles, URLs, and metadata</li>
-                                <li>Allows you to select which laws to import</li>
-                                <li>Automatically creates IngestedLaw records for selected items</li>
+                                <li>Fetches list of laws from zakon.hr categories (98, 99, 100, 101)</li>
+                                <li>Categories: Domovinski rat, Kazneno i prekršajno</li>
+                                <li>Displays available laws with titles and metadata</li>
                             </ul>
+                            <div style="margin-top:12px; padding:10px; background:rgba(14,165,233,0.1); border:1px solid rgba(14,165,233,0.2); border-radius:8px">
+                                <strong style="color:#7dd3fc">ℹ️ Note:</strong>
+                                <span style="color:var(--muted)">After fetching the list, you can select which laws to actually scrape and import the full content.</span>
+                            </div>
                         </div>
                     </div>
 
@@ -457,18 +460,29 @@
                                 wire:loading.attr="disabled"
                                 class="btn success"
                                 style="padding:12px 24px; font-size:15px">
-                            <span wire:loading.remove wire:target="startScraping">🚀 Start Scraping</span>
-                            <span wire:loading wire:target="startScraping">⏳ Scraping...</span>
+                            <span wire:loading.remove wire:target="startScraping">🚀 Fetch Available Laws</span>
+                            <span wire:loading wire:target="startScraping">⏳ Fetching list...</span>
                         </button>
                     </div>
                 @else
                     {{-- Scraped Laws List --}}
                     <div>
+                        <div class="seg" style="margin-bottom:16px">
+                            <div class="text-sm" style="line-height:1.6">
+                                <strong>✅ Step 2: Select Laws to Import</strong>
+                                <div style="color:var(--muted); margin-top:4px">
+                                    Found <strong style="color:var(--accent)">{{ count($scrapedLaws) }}</strong> unique laws.
+                                    Select the laws you want to scrape and import the full content.
+                                </div>
+                            </div>
+                        </div>
+
                         <div class="flex items-center justify-between mb-4">
                             <div class="text-sm">
-                                Found <strong>{{ count($scrapedLaws) }}</strong> unique laws
                                 @if(!empty($selectedLawsToImport))
-                                    · <strong class="text-sm" style="color:var(--accent)">{{ count($selectedLawsToImport) }}</strong> selected
+                                    <strong class="text-sm" style="color:var(--accent)">{{ count($selectedLawsToImport) }}</strong> law(s) selected for import
+                                @else
+                                    <span class="text-muted">No laws selected yet</span>
                                 @endif
                             </div>
                             <div class="flex gap-2">
@@ -550,12 +564,36 @@
                             </table>
                         </div>
 
+                        {{-- Import Progress --}}
+                        @if($isImporting)
+                            <div class="seg" style="margin-top:16px">
+                                <div class="text-sm mb-2">
+                                    <strong>Importing laws...</strong>
+                                    <span class="text-muted">{{ $importProgress }} / {{ $importTotal }}</span>
+                                </div>
+                                <div style="background:#0b1220; border:1px solid var(--border); border-radius:8px; overflow:hidden; height:24px; margin-bottom:8px">
+                                    <div style="background:linear-gradient(90deg, var(--success), #16a34a); height:100%; width:{{ $importTotal > 0 ? ($importProgress / $importTotal * 100) : 0 }}%; transition:width 0.3s ease"></div>
+                                </div>
+                                <div class="text-xs text-muted">
+                                    Currently importing: <strong>{{ $currentlyImporting }}</strong>
+                                </div>
+                            </div>
+                        @endif
+
                         <div class="form-actions" style="border-top:none; margin-top:16px; padding-top:0">
-                            <button @click="open=false" class="btn">Cancel</button>
+                            <button @click="open=false"
+                                    class="btn"
+                                    @if($isImporting) disabled @endif>
+                                Cancel
+                            </button>
                             <button wire:click="importSelectedLaws"
                                     class="btn success"
-                                    @if(empty($selectedLawsToImport)) disabled @endif>
-                                📥 Import {{ count($selectedLawsToImport) }} Selected Law(s)
+                                    @if(empty($selectedLawsToImport) || $isImporting) disabled @endif>
+                                @if($isImporting)
+                                    ⏳ Importing...
+                                @else
+                                    📥 Import & Scrape {{ count($selectedLawsToImport) }} Selected Law(s)
+                                @endif
                             </button>
                         </div>
                     </div>
