@@ -9,6 +9,9 @@
             <label>Search</label>
             <input type="text" wire:model.debounce.300ms="search" placeholder="Search by title, doc ID, law number..." class="in" style="min-width:320px" />
         </div>
+        <button wire:click="openScraper" class="btn success">
+            🌐 Scrape Laws from zakon.hr
+        </button>
         <button wire:click="createIngested" class="btn primary">
             ➕ New Ingested Law
         </button>
@@ -426,4 +429,156 @@
             </form>
         </div>
     </div>
+
+    {{-- Modal: Law Scraper --}}
+    <div x-data="{ open: @entangle('showScraperModal') }" x-cloak x-show="open" class="modal-backdrop" @click.self="open=false">
+        <div class="modal" @click.stop style="max-width:1000px">
+            <div class="modal-header">
+                <h2>🌐 Scrape Laws from zakon.hr</h2>
+                <button @click="open=false" class="btn error" style="padding:6px 12px">✕ Close</button>
+            </div>
+            <div class="modal-body">
+                {{-- Scraper Instructions --}}
+                @if(empty($scrapedLaws))
+                    <div class="seg" style="margin-bottom:16px">
+                        <div class="text-sm" style="line-height:1.6">
+                            <strong>How it works:</strong>
+                            <ul style="margin:8px 0 0 20px; padding:0">
+                                <li>Scrapes laws from zakon.hr categories (98, 99, 100, 101)</li>
+                                <li>Extracts law titles, URLs, and metadata</li>
+                                <li>Allows you to select which laws to import</li>
+                                <li>Automatically creates IngestedLaw records for selected items</li>
+                            </ul>
+                        </div>
+                    </div>
+
+                    <div class="text-center" style="padding:20px">
+                        <button wire:click="startScraping"
+                                wire:loading.attr="disabled"
+                                class="btn success"
+                                style="padding:12px 24px; font-size:15px">
+                            <span wire:loading.remove wire:target="startScraping">🚀 Start Scraping</span>
+                            <span wire:loading wire:target="startScraping">⏳ Scraping...</span>
+                        </button>
+                    </div>
+                @else
+                    {{-- Scraped Laws List --}}
+                    <div>
+                        <div class="flex items-center justify-between mb-4">
+                            <div class="text-sm">
+                                Found <strong>{{ count($scrapedLaws) }}</strong> unique laws
+                                @if(!empty($selectedLawsToImport))
+                                    · <strong class="text-sm" style="color:var(--accent)">{{ count($selectedLawsToImport) }}</strong> selected
+                                @endif
+                            </div>
+                            <div class="flex gap-2">
+                                <div class="ctrl" style="margin:0">
+                                    <input type="text"
+                                           wire:model.live.debounce.300ms="scraperSearchFilter"
+                                           placeholder="Filter laws..."
+                                           class="in small"
+                                           style="min-width:200px" />
+                                </div>
+                                <button wire:click="selectAllFilteredLaws" class="btn" style="padding:8px 12px; font-size:12px">
+                                    ✓ Select All
+                                </button>
+                                <button wire:click="deselectAllLaws" class="btn" style="padding:8px 12px; font-size:12px">
+                                    ✗ Deselect All
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="table-container" style="max-height:500px; overflow-y:auto">
+                            <table>
+                                <thead style="position:sticky; top:0; z-index:1">
+                                    <tr>
+                                        <th style="width:40px">
+                                            <input type="checkbox"
+                                                   @if(count($selectedLawsToImport) > 0 && count($selectedLawsToImport) === count($this->getFilteredScrapedLaws()))
+                                                       checked
+                                                   @endif
+                                                   wire:click="selectAllFilteredLaws"
+                                                   style="cursor:pointer" />
+                                        </th>
+                                        <th>Title</th>
+                                        <th style="width:100px">Law #</th>
+                                        <th style="width:150px">Categories</th>
+                                        <th style="width:100px">URL</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @forelse($this->getFilteredScrapedLaws() as $law)
+                                        <tr>
+                                            <td class="text-center">
+                                                <input type="checkbox"
+                                                       wire:click="toggleLawSelection('{{ $law['url'] }}')"
+                                                       @if(in_array($law['url'], $selectedLawsToImport)) checked @endif
+                                                       style="cursor:pointer" />
+                                            </td>
+                                            <td>{{ $law['title'] }}</td>
+                                            <td class="text-center">
+                                                @if($law['law_number'])
+                                                    <span class="chip" style="padding:4px 8px">#{{ $law['law_number'] }}</span>
+                                                @else
+                                                    <span class="text-muted">—</span>
+                                                @endif
+                                            </td>
+                                            <td class="text-center">
+                                                @if(isset($law['found_in_categories']) && is_array($law['found_in_categories']))
+                                                    <span class="text-xs text-muted">{{ implode(', ', $law['found_in_categories']) }}</span>
+                                                @else
+                                                    <span class="text-muted">—</span>
+                                                @endif
+                                            </td>
+                                            <td class="text-center">
+                                                <a href="{{ $law['url'] }}"
+                                                   target="_blank"
+                                                   class="chip info"
+                                                   style="padding:4px 8px; text-decoration:none; cursor:pointer">
+                                                    🔗 View
+                                                </a>
+                                            </td>
+                                        </tr>
+                                    @empty
+                                        <tr>
+                                            <td colspan="5" class="text-center text-muted" style="padding:40px 20px">
+                                                No laws match your filter.
+                                            </td>
+                                        </tr>
+                                    @endforelse
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <div class="form-actions" style="border-top:none; margin-top:16px; padding-top:0">
+                            <button @click="open=false" class="btn">Cancel</button>
+                            <button wire:click="importSelectedLaws"
+                                    class="btn success"
+                                    @if(empty($selectedLawsToImport)) disabled @endif>
+                                📥 Import {{ count($selectedLawsToImport) }} Selected Law(s)
+                            </button>
+                        </div>
+                    </div>
+                @endif
+            </div>
+        </div>
+    </div>
+
+    {{-- Toast Notifications --}}
+    <script>
+        document.addEventListener('livewire:init', () => {
+            Livewire.on('scraping-complete', (event) => {
+                alert('✅ ' + event.message);
+            });
+            Livewire.on('scraping-error', (event) => {
+                alert('❌ ' + event.message);
+            });
+            Livewire.on('import-complete', (event) => {
+                alert('✅ ' + event.message);
+            });
+            Livewire.on('import-error', (event) => {
+                alert('❌ ' + event.message);
+            });
+        });
+    </script>
 </div>

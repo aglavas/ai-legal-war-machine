@@ -5,6 +5,7 @@ namespace App\Http\Livewire;
 use App\Models\IngestedLaw;
 use App\Models\Law;
 use App\Models\LawUpload;
+use App\Services\ZakonHrScraper;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
@@ -28,6 +29,13 @@ class IngestedLawsManager extends Component
     public array $editingIngested = [];
     public array $editingLaw = [];
     public array $editingUpload = [];
+
+    // Scraping
+    public bool $showScraperModal = false;
+    public bool $isScraperLoading = false;
+    public array $scrapedLaws = [];
+    public array $selectedLawsToImport = [];
+    public string $scraperSearchFilter = '';
 
     protected $paginationTheme = 'tailwind';
 
@@ -336,6 +344,139 @@ class IngestedLawsManager extends Component
     public function updatingSearch(): void
     {
         $this->resetPage();
+    }
+
+    // ----- Scraping actions
+    public function openScraper(): void
+    {
+        $this->showScraperModal = true;
+        $this->scrapedLaws = [];
+        $this->selectedLawsToImport = [];
+        $this->scraperSearchFilter = '';
+    }
+
+    public function startScraping(): void
+    {
+        $this->isScraperLoading = true;
+        $this->scrapedLaws = [];
+        $this->selectedLawsToImport = [];
+
+        try {
+            $scraper = new ZakonHrScraper();
+            $this->scrapedLaws = $scraper->getUniqueLaws();
+
+            $this->dispatch('scraping-complete', [
+                'message' => 'Successfully scraped ' . count($this->scrapedLaws) . ' laws',
+            ]);
+        } catch (\Exception $e) {
+            $this->dispatch('scraping-error', [
+                'message' => 'Scraping failed: ' . $e->getMessage(),
+            ]);
+        } finally {
+            $this->isScraperLoading = false;
+        }
+    }
+
+    public function toggleLawSelection(string $lawUrl): void
+    {
+        if (in_array($lawUrl, $this->selectedLawsToImport)) {
+            $this->selectedLawsToImport = array_values(
+                array_filter($this->selectedLawsToImport, fn($url) => $url !== $lawUrl)
+            );
+        } else {
+            $this->selectedLawsToImport[] = $lawUrl;
+        }
+    }
+
+    public function selectAllFilteredLaws(): void
+    {
+        $filtered = $this->getFilteredScrapedLaws();
+        $this->selectedLawsToImport = array_unique(
+            array_merge($this->selectedLawsToImport, array_column($filtered, 'url'))
+        );
+    }
+
+    public function deselectAllLaws(): void
+    {
+        $this->selectedLawsToImport = [];
+    }
+
+    public function importSelectedLaws(): void
+    {
+        if (empty($this->selectedLawsToImport)) {
+            $this->dispatch('import-error', [
+                'message' => 'No laws selected for import',
+            ]);
+            return;
+        }
+
+        $imported = 0;
+        $skipped = 0;
+        $errors = 0;
+
+        foreach ($this->scrapedLaws as $law) {
+            if (!in_array($law['url'], $this->selectedLawsToImport)) {
+                continue;
+            }
+
+            try {
+                // Generate doc_id from law number or slug
+                $docId = 'zakon-hr-' . ($law['law_number'] ?? $law['slug'] ?? Str::random(8));
+
+                // Check if already exists
+                if (IngestedLaw::where('doc_id', $docId)->exists()) {
+                    $skipped++;
+                    continue;
+                }
+
+                // Create ingested law
+                IngestedLaw::create([
+                    'id' => (string) Str::ulid(),
+                    'doc_id' => $docId,
+                    'title' => $law['title'],
+                    'law_number' => $law['law_number'],
+                    'jurisdiction' => 'Croatia',
+                    'country' => 'HR',
+                    'language' => 'hr',
+                    'source_url' => $law['url'],
+                    'keywords_text' => 'zakon.hr',
+                    'metadata' => [
+                        'scraper' => 'ZakonHrScraper',
+                        'scraped_at' => now()->toIso8601String(),
+                        'slug' => $law['slug'],
+                        'found_in_categories' => $law['found_in_categories'] ?? [],
+                    ],
+                    'ingested_at' => now(),
+                ]);
+
+                $imported++;
+            } catch (\Exception $e) {
+                $errors++;
+            }
+        }
+
+        $this->dispatch('import-complete', [
+            'message' => "Import complete: {$imported} imported, {$skipped} skipped, {$errors} errors",
+        ]);
+
+        $this->showScraperModal = false;
+        $this->scrapedLaws = [];
+        $this->selectedLawsToImport = [];
+    }
+
+    public function getFilteredScrapedLaws(): array
+    {
+        if (empty($this->scraperSearchFilter)) {
+            return $this->scrapedLaws;
+        }
+
+        $filter = mb_strtolower($this->scraperSearchFilter);
+
+        return array_filter($this->scrapedLaws, function ($law) use ($filter) {
+            return str_contains(mb_strtolower($law['title']), $filter)
+                || str_contains(mb_strtolower($law['slug'] ?? ''), $filter)
+                || str_contains((string) ($law['law_number'] ?? ''), $filter);
+        });
     }
 
     // ----- Render
