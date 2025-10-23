@@ -67,7 +67,7 @@ class LawVectorStoreService
                     'ingested_law_id' => $ingestedId,
                     // content
                     'content' => $content,
-                    'metadata' => isset($doc['metadata']) ? json_encode($doc['metadata']) : null,
+                    'metadata' => isset($doc['metadata']) ? json_encode($doc['metadata'], JSON_UNESCAPED_UNICODE) : null,
                     'chunk_index' => (int)($doc['chunk_index'] ?? 0),
                     // embedding
                     'embedding_provider' => $provider,
@@ -123,7 +123,7 @@ class LawVectorStoreService
                  ] as $dateKey) {
             if (!empty($meta[$dateKey])) $map[$dateKey] = $meta[$dateKey];
         }
-        if (isset($meta['tags'])) $map['tags'] = json_encode((array)$meta['tags']);
+        if (isset($meta['tags'])) $map['tags'] = json_encode((array)$meta['tags'], JSON_UNESCAPED_UNICODE);
         return $map;
     }
 
