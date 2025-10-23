@@ -38,8 +38,11 @@ class ChatMessage extends Model
         });
 
         // Update conversation's last_message_at timestamp
+        // Use DB update to avoid loading the relationship
         static::created(function ($message) {
-            $message->conversation->touchLastMessage();
+            \DB::table('chat_conversations')
+                ->where('id', $message->chat_conversation_id)
+                ->update(['last_message_at' => now()]);
         });
     }
 
