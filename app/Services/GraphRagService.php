@@ -129,12 +129,77 @@ class GraphRagService
     }
 
     /**
-     * Extract keywords from content (basic implementation)
+     * Extract keywords from content with legal term boosting
      */
     protected function extractKeywords(string $content, int $maxKeywords = 10): array
     {
+        // Croatian legal terms with boost weights
+        $legalTerms = [
+            // Core legal concepts
+            'ugovor' => 2.5,        // contract
+            'obveza' => 2.5,        // obligation
+            'pravo' => 2.5,         // right/law
+            'zakon' => 3.0,         // law/statute
+            'odredba' => 2.5,       // provision
+            'postupak' => 2.5,      // procedure
+            'naknada' => 2.0,       // compensation
+            'presuda' => 2.5,       // judgment/verdict
+            'odluka' => 2.5,        // decision
+            'rješenje' => 2.0,      // resolution
+
+            // Legal entities and parties
+            'tužitelj' => 2.0,      // plaintiff
+            'tuženik' => 2.0,       // defendant
+            'stranka' => 2.0,       // party
+            'sud' => 2.5,           // court
+            'sudac' => 2.0,         // judge
+            'svjedok' => 2.0,       // witness
+            'odvjetnik' => 2.0,     // lawyer
+
+            // Legal processes
+            'žalba' => 2.0,         // appeal
+            'tužba' => 2.5,         // lawsuit
+            'parnica' => 2.0,       // litigation
+            'izvršenje' => 2.0,     // execution/enforcement
+            'dokazivanje' => 2.0,   // proving/evidence
+            'saslušanje' => 2.0,    // hearing
+            'pretres' => 2.0,       // trial
+
+            // Legal effects and outcomes
+            'ništavost' => 2.0,     // nullity
+            'poništenje' => 2.0,    // annulment
+            'razvrgnuće' => 2.0,    // dissolution
+            'prekid' => 1.8,        // termination
+            'prestanak' => 1.8,     // cessation
+            'stupanje' => 1.8,      // coming into force
+
+            // Specific legal areas
+            'kazneno' => 2.0,       // criminal
+            'građansko' => 2.0,     // civil
+            'upravno' => 2.0,       // administrative
+            'trgovačko' => 2.0,     // commercial
+            'radno' => 1.8,         // labor
+            'obiteljsko' => 1.8,    // family
+
+            // Important legal modifiers
+            'zakonit' => 2.0,       // lawful
+            'nezakonit' => 2.0,     // unlawful
+            'valjan' => 1.8,        // valid
+            'ništav' => 2.0,        // void
+            'pravomočan' => 2.0,    // final/legally binding
+            'izvršan' => 1.8,       // executable
+
+            // Legal documents and norms
+            'uredba' => 2.0,        // ordinance/regulation
+            'pravilnik' => 2.0,     // rulebook
+            'statut' => 2.0,        // statute
+            'protokol' => 1.8,      // protocol
+            'sporazum' => 2.0,      // agreement
+            'konvencija' => 2.0,    // convention
+        ];
+
         // Remove common Croatian stopwords
-        $stopwords = ['je', 'su', 'biti', 'ima', 'da', 'za', 'na', 'u', 'i', 'ili', 'te', 'se', 'by', 'the', 'of', 'and', 'to', 'a', 'in'];
+        $stopwords = ['je', 'su', 'biti', 'ima', 'da', 'za', 'na', 'u', 'i', 'ili', 'te', 'se', 'by', 'the', 'of', 'and', 'to', 'a', 'in', 'koji', 'koja', 'koje', 'ovaj', 'taj'];
 
         // Tokenize and clean
         $words = preg_split('/\s+/', mb_strtolower($content));
@@ -142,6 +207,14 @@ class GraphRagService
 
         // Count frequencies
         $frequencies = array_count_values($words);
+
+        // Apply legal term boosting
+        foreach ($frequencies as $word => $freq) {
+            if (isset($legalTerms[$word])) {
+                $frequencies[$word] = $freq * $legalTerms[$word];
+            }
+        }
+
         arsort($frequencies);
 
         // Get top keywords and normalize weights
