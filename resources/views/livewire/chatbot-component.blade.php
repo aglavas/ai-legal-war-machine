@@ -53,7 +53,13 @@
                 <div class="space-y-2">
                     @forelse($conversations as $conv)
                         <div class="group relative rounded-lg border {{ $conversation === $conv['uuid'] ? 'bg-sky-50 border-sky-300' : 'bg-white border-slate-200 hover:border-slate-300' }} transition cursor-pointer">
-                            <button wire:click="loadConversation('{{ $conv['uuid'] }}')" class="w-full text-left p-3">
+                            <button wire:click="loadConversation('{{ $conv['uuid'] }}')" wire:loading.attr="disabled" wire:loading.class="opacity-50" class="w-full text-left p-3 relative">
+                                <div wire:loading wire:target="loadConversation('{{ $conv['uuid'] }}')" class="absolute inset-0 flex items-center justify-center bg-white/50 rounded-lg">
+                                    <svg class="animate-spin h-5 w-5 text-sky-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                    </svg>
+                                </div>
                                 <div class="font-medium text-sm text-slate-900 truncate">
                                     {{ $conv['title'] }}
                                 </div>
@@ -145,9 +151,15 @@
                                 {{-- Message Content --}}
                                 <div class="flex-1">
                                     <div class="rounded-2xl px-4 py-3 {{ $message['is_user'] ? 'bg-sky-600 text-white' : 'bg-white border border-slate-200 text-slate-900' }}">
-                                        <div class="text-sm whitespace-pre-wrap break-words">{{ $message['content'] }}</div>
+                                        @if($message['is_user'])
+                                            <div class="text-sm whitespace-pre-wrap break-words">{{ $message['content'] }}</div>
+                                        @else
+                                            <div class="text-sm prose prose-sm max-w-none prose-slate prose-headings:font-semibold prose-a:text-sky-600 prose-code:bg-slate-100 prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-code:text-slate-900 prose-pre:bg-slate-900 prose-pre:text-slate-100">
+                                                {!! $message['content_html'] ?? e($message['content']) !!}
+                                            </div>
+                                        @endif
                                     </div>
-                                    <div class="text-xs text-slate-500 mt-1 {{ $message['is_user'] ? 'text-right' : '' }}">
+                                    <div class="text-xs text-slate-500 mt-1 {{ $message['is_user'] ? 'text-right' : '' }}" title="{{ $message['full_timestamp'] ?? '' }}">
                                         {{ $message['created_at'] }}
                                     </div>
                                 </div>
@@ -237,21 +249,42 @@
 @push('scripts')
 <script>
     // Auto-scroll to bottom when new messages arrive
+    function scrollToBottom() {
+        const container = document.getElementById('messages-container');
+        if (container) {
+            // Use requestAnimationFrame for smooth scrolling
+            requestAnimationFrame(() => {
+                container.scrollTo({
+                    top: container.scrollHeight,
+                    behavior: 'smooth'
+                });
+            });
+        }
+    }
+
+    // Livewire hooks for auto-scroll
     document.addEventListener('livewire:init', () => {
+        // Scroll when component updates
         Livewire.hook('morph.updated', ({ el, component }) => {
-            const container = document.getElementById('messages-container');
-            if (container) {
-                container.scrollTop = container.scrollHeight;
+            if (el && el.id === 'messages-container') {
+                scrollToBottom();
             }
+        });
+
+        // Scroll after message is sent
+        Livewire.hook('message.processed', (message, component) => {
+            setTimeout(scrollToBottom, 100);
         });
     });
 
-    // Initial scroll to bottom
-    window.addEventListener('load', () => {
-        const container = document.getElementById('messages-container');
-        if (container) {
-            container.scrollTop = container.scrollHeight;
-        }
+    // Initial scroll to bottom on page load
+    document.addEventListener('DOMContentLoaded', () => {
+        setTimeout(scrollToBottom, 200);
+    });
+
+    // Also scroll when Livewire finishes loading
+    document.addEventListener('livewire:navigated', () => {
+        setTimeout(scrollToBottom, 200);
     });
 </script>
 @endpush
