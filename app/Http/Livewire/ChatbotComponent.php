@@ -223,7 +223,7 @@ class ChatbotComponent extends Component
             // Call OpenAI API (outside transaction as it's external call)
             $response = $this->callOpenAI($conversationHistory);
 
-            // Save assistant response
+            // Save assistant response with RAG metadata
             $assistantMessage = ChatMessage::create([
                 'chat_conversation_id' => $this->activeConversation->id,
                 'role' => 'assistant',
@@ -232,6 +232,9 @@ class ChatbotComponent extends Component
                     'model' => $response['model'] ?? null,
                     'tokens' => $response['tokens'] ?? null,
                     'finish_reason' => $response['finish_reason'] ?? null,
+                    'rag_enabled' => $response['rag_context'] ?? false,
+                    'retrieved_docs_count' => $response['retrieved_docs'] ?? 0,
+                    'agent_type' => $this->agentType,
                 ],
             ]);
 
@@ -323,15 +326,57 @@ class ChatbotComponent extends Component
     }
 
     /**
-     * Call OpenAI API with the conversation history
+     * Call OpenAI API with the conversation history and RAG context
      */
     protected function callOpenAI(array $messages): array
     {
         /** @var OpenAIService $openai */
         $openai = app(OpenAIService::class);
 
-        // Add system message based on agent type
-        $systemMessage = $this->getSystemMessage();
+        // Get the last user message for RAG context retrieval
+        $lastUserMessage = '';
+        for ($i = count($messages) - 1; $i >= 0; $i--) {
+            if ($messages[$i]['role'] === 'user') {
+                $lastUserMessage = $messages[$i]['content'];
+                break;
+            }
+        }
+
+        // Retrieve relevant context using RAG
+        $ragContext = null;
+        $retrievedDocs = [];
+
+        if ($lastUserMessage && in_array($this->agentType, ['law', 'court_decision', 'case_analysis'])) {
+            try {
+                /** @var \App\Services\ChatbotRAGService $ragService */
+                $ragService = app(\App\Services\ChatbotRAGService::class);
+
+                $ragResult = $ragService->retrieveContext($lastUserMessage, $this->agentType, [
+                    'max_results' => 3,
+                    'min_score' => 0.75,
+                ]);
+
+                $ragContext = $ragResult['context'];
+                $retrievedDocs = $ragResult['documents'];
+
+                Log::info('chatbot.rag.retrieved', [
+                    'query' => $lastUserMessage,
+                    'strategy' => $ragResult['strategy'],
+                    'doc_count' => $ragResult['document_count'],
+                    'agent_type' => $this->agentType,
+                ]);
+            } catch (Throwable $e) {
+                Log::warning('chatbot.rag.failed', [
+                    'error' => $e->getMessage(),
+                    'query' => $lastUserMessage,
+                ]);
+                // Continue without RAG context
+            }
+        }
+
+        // Build system message with RAG context
+        $systemMessage = $this->getSystemMessageWithContext($ragContext);
+
         array_unshift($messages, [
             'role' => 'system',
             'content' => $systemMessage,
@@ -350,11 +395,13 @@ class ChatbotComponent extends Component
             'model' => $response['model'] ?? null,
             'tokens' => $response['usage'] ?? null,
             'finish_reason' => $choice['finish_reason'] ?? null,
+            'rag_context' => $ragContext ? true : false,
+            'retrieved_docs' => count($retrievedDocs),
         ];
     }
 
     /**
-     * Get system message based on agent type
+     * Get system message based on agent type (without context)
      */
     protected function getSystemMessage(): string
     {
@@ -364,6 +411,27 @@ class ChatbotComponent extends Component
             'case_analysis' => 'You are a legal case analyst. Help users analyze legal cases, identify key issues, and suggest strategies.',
             default => 'You are a helpful AI assistant. Provide clear, accurate, and helpful responses to user questions.',
         };
+    }
+
+    /**
+     * Get system message with RAG context integrated
+     */
+    protected function getSystemMessageWithContext(?string $ragContext): string
+    {
+        $baseMessage = $this->getSystemMessage();
+
+        if (!$ragContext) {
+            return $baseMessage;
+        }
+
+        // Add instructions for using the retrieved context
+        $contextInstructions = "\n\n## Retrieved Legal Context\n\n";
+        $contextInstructions .= "You have been provided with relevant legal documents below. Use this information to provide accurate, well-sourced answers. ";
+        $contextInstructions .= "Always cite the specific documents, laws, or cases when referencing this information. ";
+        $contextInstructions .= "If the retrieved context doesn't contain the answer, clearly state that and provide general guidance.\n\n";
+        $contextInstructions .= $ragContext;
+
+        return $baseMessage . $contextInstructions;
     }
 
     /**
