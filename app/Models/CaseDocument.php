@@ -13,7 +13,7 @@ class CaseDocument extends Model
 
     protected $fillable = [
         'id', 'case_id', 'doc_id', 'upload_id', 'title', 'category', 'author', 'language', 'tags',
-        'chunk_index', 'content', 'metadata', 'source', 'source_id', 'embedding_provider',
+        'chunk_index', 'content', 'metadata', 'actual', 'source', 'source_id', 'embedding_provider',
         'embedding_model', 'embedding_dimensions', 'embedding_norm', 'content_hash', 'token_count',
         'embedding_vector', 'embedding',
     ];
@@ -21,6 +21,7 @@ class CaseDocument extends Model
     protected $casts = [
         'tags' => 'array',
         'metadata' => 'array',
+        'actual' => 'array',
         'embedding_vector' => 'array',
     ];
 
