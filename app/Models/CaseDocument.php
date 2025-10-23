@@ -39,5 +39,23 @@ class CaseDocument extends Model
     {
         return $this->belongsTo(CaseDocumentUpload::class, 'upload_id');
     }
+
+    /**
+     * Boot the model with event listeners for graph database synchronization
+     */
+    protected static function booted()
+    {
+        static::updated(function ($caseDocument) {
+            if (config('neo4j.sync.auto_sync')) {
+                app(\App\Services\GraphRagService::class)->syncCase($caseDocument->id);
+            }
+        });
+
+        static::deleted(function ($caseDocument) {
+            if (config('neo4j.sync.enabled')) {
+                app(\App\Services\GraphDatabaseService::class)->deleteNode('CaseDocument', $caseDocument->id);
+            }
+        });
+    }
 }
 

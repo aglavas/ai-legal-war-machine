@@ -38,4 +38,22 @@ class Law extends Model
     {
         return $this->belongsTo(IngestedLaw::class, 'ingested_law_id');
     }
+
+    /**
+     * Boot the model with event listeners for graph database synchronization
+     */
+    protected static function booted()
+    {
+        static::updated(function ($law) {
+            if (config('neo4j.sync.auto_sync')) {
+                app(\App\Services\GraphRagService::class)->syncLaw($law->id);
+            }
+        });
+
+        static::deleted(function ($law) {
+            if (config('neo4j.sync.enabled')) {
+                app(\App\Services\GraphDatabaseService::class)->deleteNode('LawDocument', $law->id);
+            }
+        });
+    }
 }
