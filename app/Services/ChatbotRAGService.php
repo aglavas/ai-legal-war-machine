@@ -114,6 +114,17 @@ class ChatbotRAGService
             $allDocs[] = $doc;
         }
 
+        // Deduplicate across ALL sources (not just within each source)
+        $allDocs = $this->deduplicateDocuments($allDocs);
+
+        Log::debug('chatbot_rag.sources_retrieved', [
+            'total_docs' => count($allDocs),
+            'laws' => count($lawDocs),
+            'cases' => count($caseDocs),
+            'court_decisions' => count($courtDocs),
+            'agent_type' => $agentType,
+        ]);
+
         return $allDocs;
     }
 
@@ -227,6 +238,9 @@ class ChatbotRAGService
             $queryEmbedding = $response['data'][0]['embedding'] ?? null;
 
             if (!$queryEmbedding) {
+                Log::warning('chatbot_rag.vector_search_laws.no_embedding', [
+                    'query' => Str::limit($query, 100),
+                ]);
                 return [];
             }
 
@@ -239,6 +253,13 @@ class ChatbotRAGService
                 ->orderByRaw('embedding_vector <=> ?::vector', [$embeddingStr])
                 ->limit($limit)
                 ->get();
+
+            Log::debug('chatbot_rag.vector_search_laws.results', [
+                'query' => Str::limit($query, 100),
+                'found' => count($results),
+                'limit' => $limit,
+                'min_score' => $minScore,
+            ]);
 
             return $results->map(fn($row) => [
                 'type' => 'law',
@@ -259,6 +280,7 @@ class ChatbotRAGService
             Log::error('chatbot_rag.vector_search_laws.error', [
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString(),
+                'query' => Str::limit($query, 100),
             ]);
             return [];
         }
@@ -477,6 +499,7 @@ class ChatbotRAGService
 
     /**
      * Prioritize documents and manage token budget
+     * Ensures we stay within token limits while prioritizing most relevant docs
      */
     protected function prioritizeAndBudget(array $documents, array $processedQuery, int $maxTokens): array
     {
@@ -485,11 +508,12 @@ class ChatbotRAGService
             $priorityBoost = $doc['priority_boost'] ?? 1.0;
             $doc['adjusted_score'] = ($doc['score'] ?? 0) * $priorityBoost;
         }
+        unset($doc); // Break reference
 
-        // Sort by adjusted score
+        // Sort by adjusted score (highest first)
         usort($documents, fn($a, $b) => ($b['adjusted_score'] ?? 0) <=> ($a['adjusted_score'] ?? 0));
 
-        // Apply token budget
+        // Apply token budget with greedy selection
         $selectedDocs = [];
         $totalTokens = 0;
 
@@ -497,18 +521,32 @@ class ChatbotRAGService
             $docTokens = $doc['token_count'] ?? $this->estimateTokens($doc['content'] ?? '');
 
             if ($totalTokens + $docTokens <= $maxTokens) {
+                // Document fits within budget
                 $selectedDocs[] = $doc;
                 $totalTokens += $docTokens;
             } else {
-                // Try to fit partial document if it's the first few
+                // Budget exceeded - make exception for first 3 critical documents
                 if (count($selectedDocs) < 3) {
-                    // For critical documents, include even if over budget slightly
                     $selectedDocs[] = $doc;
                     $totalTokens += $docTokens;
+                    Log::debug('chatbot_rag.budget_exceeded_but_critical', [
+                        'doc_title' => Str::limit($doc['title'] ?? 'Unknown', 50),
+                        'doc_tokens' => $docTokens,
+                        'total_tokens' => $totalTokens,
+                        'budget' => $maxTokens,
+                    ]);
                 }
-                break; // Stop once budget exceeded
+                break; // Stop processing once we've exceeded budget
             }
         }
+
+        Log::debug('chatbot_rag.budget_applied', [
+            'input_docs' => count($documents),
+            'selected_docs' => count($selectedDocs),
+            'total_tokens' => $totalTokens,
+            'budget' => $maxTokens,
+            'utilization' => round(($totalTokens / $maxTokens) * 100, 1) . '%',
+        ]);
 
         return $selectedDocs;
     }

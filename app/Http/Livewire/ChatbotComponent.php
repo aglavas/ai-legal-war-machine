@@ -217,7 +217,8 @@ class ChatbotComponent extends Component
                 'is_user' => true,
             ];
 
-            // Get conversation history for context (limit to last 20 messages for efficiency)
+            // Get conversation history for context
+            // Start with reasonable limit, may be adjusted based on RAG context size
             $conversationHistory = $this->getRecentConversationHistory(20);
 
             // Call OpenAI API (outside transaction as it's external call)
@@ -346,7 +347,7 @@ class ChatbotComponent extends Component
 
         // Retrieve relevant context using RAG
         $ragContext = null;
-        $retrievedDocs = [];
+        $ragResult = null;
 
         if ($lastUserMessage && in_array($this->agentType, ['law', 'court_decision', 'case_analysis'])) {
             try {
@@ -360,7 +361,17 @@ class ChatbotComponent extends Component
                 ]);
 
                 $ragContext = $ragResult['context'];
-                $retrievedDocs = $ragResult['documents'];
+
+                // If RAG context is very large, reduce conversation history to prevent overflow
+                $ragTokens = $ragResult['total_tokens'] ?? 0;
+                if ($ragTokens > 60000) {
+                    // Large RAG context - reduce conversation history
+                    $messages = array_slice($messages, -10);
+                    Log::debug('chatbot.context_window.reduced_history', [
+                        'rag_tokens' => $ragTokens,
+                        'reduced_to_messages' => count($messages),
+                    ]);
+                }
 
                 Log::info('chatbot.rag.retrieved', [
                     'query' => Str::limit($lastUserMessage, 100),
@@ -405,36 +416,12 @@ class ChatbotComponent extends Component
             'tokens' => $response['usage'] ?? null,
             'finish_reason' => $choice['finish_reason'] ?? null,
             'rag_context' => $ragContext ? true : false,
-            'retrieved_docs' => count($retrievedDocs),
-            'rag_context_tokens' => array_sum(array_column($retrievedDocs, 'token_count')),
-            'sources_breakdown' => $this->getSourcesBreakdown($retrievedDocs),
+            'retrieved_docs' => $ragResult['document_count'] ?? 0,
+            'rag_context_tokens' => $ragResult['total_tokens'] ?? 0,
+            'sources_breakdown' => $ragResult['sources_breakdown'] ?? null,
         ];
     }
 
-    /**
-     * Get breakdown of retrieved documents by type
-     */
-    protected function getSourcesBreakdown(array $documents): ?array
-    {
-        if (empty($documents)) {
-            return null;
-        }
-
-        $breakdown = [
-            'law' => 0,
-            'case' => 0,
-            'court_decision' => 0,
-        ];
-
-        foreach ($documents as $doc) {
-            $type = $doc['type'] ?? null;
-            if ($type && isset($breakdown[$type])) {
-                $breakdown[$type]++;
-            }
-        }
-
-        return $breakdown;
-    }
 
     /**
      * Get system message based on agent type (without context)
