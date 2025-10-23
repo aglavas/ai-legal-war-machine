@@ -63,6 +63,9 @@ class GraphRagService
         // Create keyword relationships
         $this->extractAndLinkKeywords('LawDocument', $law->id, $law->content);
 
+        // Extract and create citation relationships
+        $this->extractAndCreateCitations('LawDocument', $law->id, $law->content);
+
         // Find and create similarity relationships
         $this->createSimilarityRelationships('LawDocument', $law->id, $law->embedding_vector ?? null);
     }
@@ -96,6 +99,9 @@ class GraphRagService
 
         // Create keyword relationships
         $this->extractAndLinkKeywords('CaseDocument', $caseDoc->id, $caseDoc->content);
+
+        // Extract and create citation relationships (cases can cite laws and reference other cases)
+        $this->extractAndCreateCitations('CaseDocument', $caseDoc->id, $caseDoc->content);
 
         // Find and create similarity relationships
         $this->createSimilarityRelationships('CaseDocument', $caseDoc->id, $caseDoc->embedding_vector ?? null);
@@ -149,6 +155,159 @@ class GraphRagService
         $maxFreq = max($topKeywords ?: [1]);
 
         return array_map(fn($freq) => round($freq / $maxFreq, 2), $topKeywords);
+    }
+
+    /**
+     * Extract citations from content and create relationships
+     */
+    protected function extractAndCreateCitations(string $nodeLabel, string $nodeId, string $content): void
+    {
+        // Croatian legal citation patterns
+        $citations = [];
+
+        // Pattern 1: NN citations - "NN 123/20", "Narodne novine 45/2021"
+        preg_match_all('/(?:NN|Narodne\s+novine)\s+(\d+\/\d+)/iu', $content, $matches);
+        foreach ($matches[1] as $lawNumber) {
+            $citations[] = [
+                'type' => 'law_number',
+                'value' => $lawNumber,
+            ];
+        }
+
+        // Pattern 2: Article references with law numbers - "članak 5. Zakona (NN 123/20)"
+        preg_match_all('/(?:članak|čl\.?)\s+(\d+)(?:\.|,)?\s*(?:Zakona?\s+)?(?:\()?(?:NN|Narodne\s+novine)\s+(\d+\/\d+)/iu', $content, $matches, PREG_SET_ORDER);
+        foreach ($matches as $match) {
+            $citations[] = [
+                'type' => 'article_reference',
+                'article' => $match[1],
+                'law_number' => $match[2],
+            ];
+        }
+
+        // Pattern 3: Law names with citations - "Zakon o ...  (NN 123/20)"
+        preg_match_all('/Zakon\s+o\s+([^\(]{5,100})\s*\((?:NN|Narodne\s+novine)\s+(\d+\/\d+)\)/iu', $content, $matches, PREG_SET_ORDER);
+        foreach ($matches as $match) {
+            $citations[] = [
+                'type' => 'named_law',
+                'name' => trim($match[1]),
+                'law_number' => $match[2],
+            ];
+        }
+
+        // Pattern 4: Court decisions/case references - "odluka broj: XYZ-123/2020"
+        preg_match_all('/(?:odluka|presuda|rješenje)\s+(?:broj:?\s+)?([A-Z]+-?\d+\/\d+(?:-\d+)?)/iu', $content, $matches);
+        foreach ($matches[1] as $caseNumber) {
+            $citations[] = [
+                'type' => 'case_reference',
+                'value' => $caseNumber,
+            ];
+        }
+
+        // Process citations and create relationships
+        foreach ($citations as $citation) {
+            try {
+                if (isset($citation['law_number'])) {
+                    // Find the referenced law in database
+                    $referencedLaw = DB::table('laws')
+                        ->where('law_number', $citation['law_number'])
+                        ->first();
+
+                    if ($referencedLaw) {
+                        // Ensure the referenced law node exists
+                        $this->graph->upsertNode('LawDocument', $referencedLaw->id, [
+                            'doc_id' => $referencedLaw->doc_id,
+                            'title' => $referencedLaw->title,
+                            'law_number' => $referencedLaw->law_number,
+                        ]);
+
+                        // Create CITES relationship
+                        $relationshipProps = [
+                            'citation_type' => $citation['type'],
+                            'created_at' => now()->toIso8601String(),
+                        ];
+
+                        // Add article number if available
+                        if (isset($citation['article'])) {
+                            $relationshipProps['article'] = $citation['article'];
+                        }
+
+                        $this->graph->createRelationship(
+                            $nodeLabel,
+                            $nodeId,
+                            'CITES',
+                            'LawDocument',
+                            $referencedLaw->id,
+                            $relationshipProps
+                        );
+                    }
+                } elseif (isset($citation['value']) && $citation['type'] === 'case_reference') {
+                    // Find the referenced case in database
+                    $referencedCase = DB::table('cases_documents')
+                        ->where('doc_id', 'LIKE', '%' . $citation['value'] . '%')
+                        ->first();
+
+                    if ($referencedCase) {
+                        // Ensure the referenced case node exists
+                        $this->graph->upsertNode('CaseDocument', $referencedCase->id, [
+                            'case_id' => $referencedCase->case_id,
+                            'doc_id' => $referencedCase->doc_id,
+                            'title' => $referencedCase->title,
+                        ]);
+
+                        // Create REFERENCES relationship
+                        $this->graph->createRelationship(
+                            $nodeLabel,
+                            $nodeId,
+                            'REFERENCES',
+                            'CaseDocument',
+                            $referencedCase->id,
+                            [
+                                'citation_type' => 'case_reference',
+                                'created_at' => now()->toIso8601String(),
+                            ]
+                        );
+                    }
+                } elseif (isset($citation['value']) && $citation['type'] === 'law_number') {
+                    // Direct law number citation
+                    $referencedLaw = DB::table('laws')
+                        ->where('law_number', $citation['value'])
+                        ->first();
+
+                    if ($referencedLaw) {
+                        // Ensure the referenced law node exists
+                        $this->graph->upsertNode('LawDocument', $referencedLaw->id, [
+                            'doc_id' => $referencedLaw->doc_id,
+                            'title' => $referencedLaw->title,
+                            'law_number' => $referencedLaw->law_number,
+                        ]);
+
+                        // Create CITES relationship
+                        $this->graph->createRelationship(
+                            $nodeLabel,
+                            $nodeId,
+                            'CITES',
+                            'LawDocument',
+                            $referencedLaw->id,
+                            [
+                                'citation_type' => 'law_number',
+                                'created_at' => now()->toIso8601String(),
+                            ]
+                        );
+                    }
+                }
+            } catch (\Exception $e) {
+                Log::warning('Failed to create citation relationship', [
+                    'citation' => $citation,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
+
+        Log::info('Citation extraction completed', [
+            'node_label' => $nodeLabel,
+            'node_id' => $nodeId,
+            'citations_found' => count($citations),
+        ]);
     }
 
     /**
@@ -338,6 +497,17 @@ class GraphRagService
             'shared_tags' => $r->get('shared_tags'),
         ])->toArray();
 
+        // Get cited laws (if any)
+        $context['cited_laws'] = $this->getCitedLaws($nodeLabel, $nodeId);
+
+        // Get citing documents (if this is a law)
+        if ($nodeLabel === 'LawDocument') {
+            $context['citing_documents'] = $this->getCitingDocuments($nodeId);
+        }
+
+        // Get referenced cases (if any)
+        $context['referenced_cases'] = $this->getReferencedCases($nodeLabel, $nodeId);
+
         return $context;
     }
 
@@ -397,5 +567,131 @@ class GraphRagService
             });
 
         return ['synced' => $synced, 'errors' => $errors];
+    }
+
+    /**
+     * Get all laws cited by a document
+     */
+    public function getCitedLaws(string $nodeLabel, string $nodeId): array
+    {
+        try {
+            $cypher = "MATCH (n:$nodeLabel {id: \$id})-[r:CITES]->(law:LawDocument)
+                       RETURN law, r.citation_type as citation_type, r.article as article
+                       ORDER BY law.law_number";
+
+            $result = $this->graph->run($cypher, ['id' => $nodeId]);
+
+            return $result->map(fn($r) => [
+                'law' => $r->get('law')->getProperties(),
+                'citation_type' => $r->get('citation_type'),
+                'article' => $r->get('article'),
+            ])->toArray();
+        } catch (\Exception $e) {
+            Log::error('Failed to get cited laws', ['error' => $e->getMessage()]);
+            return [];
+        }
+    }
+
+    /**
+     * Get all documents that cite a specific law
+     */
+    public function getCitingDocuments(string $lawId): array
+    {
+        try {
+            $cypher = "MATCH (doc)-[r:CITES]->(law:LawDocument {id: \$lawId})
+                       RETURN doc, labels(doc)[0] as docType, r.citation_type as citation_type, r.article as article
+                       ORDER BY doc.title";
+
+            $result = $this->graph->run($cypher, ['lawId' => $lawId]);
+
+            return $result->map(fn($r) => [
+                'document' => $r->get('doc')->getProperties(),
+                'document_type' => $r->get('docType'),
+                'citation_type' => $r->get('citation_type'),
+                'article' => $r->get('article'),
+            ])->toArray();
+        } catch (\Exception $e) {
+            Log::error('Failed to get citing documents', ['error' => $e->getMessage()]);
+            return [];
+        }
+    }
+
+    /**
+     * Get all case references from a document
+     */
+    public function getReferencedCases(string $nodeLabel, string $nodeId): array
+    {
+        try {
+            $cypher = "MATCH (n:$nodeLabel {id: \$id})-[r:REFERENCES]->(case:CaseDocument)
+                       RETURN case, r.citation_type as citation_type
+                       ORDER BY case.doc_id";
+
+            $result = $this->graph->run($cypher, ['id' => $nodeId]);
+
+            return $result->map(fn($r) => [
+                'case' => $r->get('case')->getProperties(),
+                'citation_type' => $r->get('citation_type'),
+            ])->toArray();
+        } catch (\Exception $e) {
+            Log::error('Failed to get referenced cases', ['error' => $e->getMessage()]);
+            return [];
+        }
+    }
+
+    /**
+     * Get citation network for a law (useful for visualization)
+     * Returns laws that cite this law, and laws cited by those laws
+     */
+    public function getCitationNetwork(string $lawId, int $depth = 2): array
+    {
+        try {
+            $cypher = "MATCH path = (citing)-[:CITES*1..$depth]->(law:LawDocument {id: \$lawId})
+                       WITH citing, law, relationships(path) as rels
+                       RETURN DISTINCT citing, law, rels
+                       LIMIT 50";
+
+            $result = $this->graph->run($cypher, ['lawId' => $lawId, 'depth' => $depth]);
+
+            $network = [
+                'center' => null,
+                'citing' => [],
+                'relationships' => [],
+            ];
+
+            foreach ($result as $record) {
+                $network['center'] = $record->get('law')->getProperties();
+                $citingDoc = $record->get('citing')->getProperties();
+                $network['citing'][] = $citingDoc;
+            }
+
+            return $network;
+        } catch (\Exception $e) {
+            Log::error('Failed to get citation network', ['error' => $e->getMessage()]);
+            return ['center' => null, 'citing' => [], 'relationships' => []];
+        }
+    }
+
+    /**
+     * Get most cited laws (useful for finding important/foundational laws)
+     */
+    public function getMostCitedLaws(int $limit = 20): array
+    {
+        try {
+            $cypher = "MATCH (doc)-[:CITES]->(law:LawDocument)
+                       WITH law, count(doc) as citation_count
+                       RETURN law, citation_count
+                       ORDER BY citation_count DESC
+                       LIMIT \$limit";
+
+            $result = $this->graph->run($cypher, ['limit' => $limit]);
+
+            return $result->map(fn($r) => [
+                'law' => $r->get('law')->getProperties(),
+                'citation_count' => $r->get('citation_count'),
+            ])->toArray();
+        } catch (\Exception $e) {
+            Log::error('Failed to get most cited laws', ['error' => $e->getMessage()]);
+            return [];
+        }
     }
 }
