@@ -223,7 +223,7 @@ class ChatbotComponent extends Component
             // Call OpenAI API (outside transaction as it's external call)
             $response = $this->callOpenAI($conversationHistory);
 
-            // Save assistant response with RAG metadata
+            // Save assistant response with enhanced RAG metadata
             $assistantMessage = ChatMessage::create([
                 'chat_conversation_id' => $this->activeConversation->id,
                 'role' => 'assistant',
@@ -234,6 +234,8 @@ class ChatbotComponent extends Component
                     'finish_reason' => $response['finish_reason'] ?? null,
                     'rag_enabled' => $response['rag_context'] ?? false,
                     'retrieved_docs_count' => $response['retrieved_docs'] ?? 0,
+                    'rag_context_tokens' => $response['rag_context_tokens'] ?? 0,
+                    'sources_breakdown' => $response['sources_breakdown'] ?? null,
                     'agent_type' => $this->agentType,
                 ],
             ]);
@@ -352,23 +354,30 @@ class ChatbotComponent extends Component
                 $ragService = app(\App\Services\ChatbotRAGService::class);
 
                 $ragResult = $ragService->retrieveContext($lastUserMessage, $this->agentType, [
-                    'max_results' => 3,
-                    'min_score' => 0.75,
+                    'max_tokens' => 80000, // Allow up to 80k tokens for context
+                    'min_score' => 0.70, // Slightly lower threshold for better recall
+                    'include_full_content' => true, // Send full document content
                 ]);
 
                 $ragContext = $ragResult['context'];
                 $retrievedDocs = $ragResult['documents'];
 
                 Log::info('chatbot.rag.retrieved', [
-                    'query' => $lastUserMessage,
+                    'query' => Str::limit($lastUserMessage, 100),
                     'strategy' => $ragResult['strategy'],
                     'doc_count' => $ragResult['document_count'],
+                    'total_tokens' => $ragResult['total_tokens'],
+                    'budget_utilization' => $ragResult['budget_utilization'],
+                    'sources_breakdown' => $ragResult['sources_breakdown'],
                     'agent_type' => $this->agentType,
+                    'conversation_id' => $this->activeConversation?->id,
                 ]);
             } catch (Throwable $e) {
                 Log::warning('chatbot.rag.failed', [
                     'error' => $e->getMessage(),
-                    'query' => $lastUserMessage,
+                    'trace' => $e->getTraceAsString(),
+                    'query' => Str::limit($lastUserMessage, 100),
+                    'agent_type' => $this->agentType,
                 ]);
                 // Continue without RAG context
             }
@@ -397,7 +406,34 @@ class ChatbotComponent extends Component
             'finish_reason' => $choice['finish_reason'] ?? null,
             'rag_context' => $ragContext ? true : false,
             'retrieved_docs' => count($retrievedDocs),
+            'rag_context_tokens' => array_sum(array_column($retrievedDocs, 'token_count')),
+            'sources_breakdown' => $this->getSourcesBreakdown($retrievedDocs),
         ];
+    }
+
+    /**
+     * Get breakdown of retrieved documents by type
+     */
+    protected function getSourcesBreakdown(array $documents): ?array
+    {
+        if (empty($documents)) {
+            return null;
+        }
+
+        $breakdown = [
+            'law' => 0,
+            'case' => 0,
+            'court_decision' => 0,
+        ];
+
+        foreach ($documents as $doc) {
+            $type = $doc['type'] ?? null;
+            if ($type && isset($breakdown[$type])) {
+                $breakdown[$type]++;
+            }
+        }
+
+        return $breakdown;
     }
 
     /**
