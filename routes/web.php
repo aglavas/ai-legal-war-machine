@@ -28,3 +28,6 @@ Route::view('/textract', 'textract')->name('textract.manager');
 
 // e-Oglasna monitoring dashboard
 Route::get('/eoglasna', \App\Http\Livewire\EoglasnaMonitoring::class)->name('eoglasna.monitoring');
+
+// AI Chatbot
+Route::get('/chatbot', \App\Http\Livewire\ChatbotComponent::class)->name('chatbot');
