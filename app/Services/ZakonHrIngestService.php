@@ -16,6 +16,7 @@ class ZakonHrIngestService
         protected LawVectorStoreService $vectorStore,
         protected PdfRenderer $renderer,
         protected PdfMerger $merger,
+        protected OpenAIService $openai,
     ) {}
 
     /**
@@ -38,7 +39,9 @@ class ZakonHrIngestService
                 $pubDate = $options['date'] ?? ($this->extractPublishedDate($html) ?? null);
                 $title = Str::replace(" -  Zakon.hr - ", '-', $title);
                 $slug = Str::slug($title);
-                $title = Str::snake($title);
+                $titleSnake = Str::snake($title);
+                // Remove -_zakon_hr suffix if present
+                $titleSnake = preg_replace('/-?_?zakon_?hr$/i', '', $titleSnake);
                 $dateDir = ($pubDate ?: date('Y-m-d'));
                 $baseDir = 'hr-laws/zakonhr/'.$slug.'/'.$dateDir;
                 Storage::put($baseDir.'/source.html', $html);
@@ -52,7 +55,7 @@ class ZakonHrIngestService
                 // Create or reuse parent IngestedLaw (skip in dry runs)
                 $ingested = null;
                 if (!$dry) {
-                    $ingested = $this->ensureIngestedLaw($docId, $title, $url, [
+                    $ingested = $this->ensureIngestedLaw($docId, $titleSnake, $url, [
                         'source' => 'zakon.hr',
                         'date_published' => $pubDate,
                         'slug' => $slug,
@@ -69,36 +72,34 @@ class ZakonHrIngestService
                     $docIdNew = $docId . '-clanak-'.$articleNumber;
 
                     // Render per-article PDF
-                    $pdfFileName = $title.' - clanak-'.$articleNumber.'.pdf';
+                    $pdfFileName = $titleSnake.' - clanak-'.$articleNumber.'.pdf';
                     $pdfRelPath = $baseDir.'/'.$pdfFileName;
                     if (!$dry) {
                         $this->renderer->renderArticle([
-                            'law_title' => $title,
+                            'law_title' => $titleSnake,
                             'law_eli' => '',
                             'law_pub_date' => $pubDate ?: '',
                             'article_number' => $articleNumber,
                             'article_html' => $art['html'],
                             'generated_at' => gmdate('c'),
                             'generator_version' => '1.0.0',
-                            'search_tags' => array_values(array_filter([$title, 'članak '.$articleNumber, $pubDate])),
+                            'search_tags' => array_values(array_filter([$titleSnake, 'članak '.$articleNumber, $pubDate])),
                         ], Storage::path($pdfRelPath));
                         $this->recordLawUpload($ingested?->id, $docIdNew, $pdfRelPath, $pdfFileName, $url);
                         $articlePdfAbs[] = Storage::path($pdfRelPath);
                     }
 
+                    // Generate enhanced metadata for this article
+                    $enhancedMetadata = $this->generateArticleMetadata($titleSnake, $plain, $articleNumber, $url, $pubDate);
+
                     $docs[] = [
                         'content' => $plain,
-                        'metadata' => [
-                            'source' => 'zakon.hr',
-                            'url' => $url,
-                            'title' => $title,
-                            'date_published' => $pubDate,
-                            'article_number' => $articleNumber,
+                        'metadata' => array_merge($enhancedMetadata, [
                             'heading_chain' => $art['heading_chain'] ?? [],
-                        ],
-                        'chunk_index' => 0,
+                        ]),
+                        'chunk_index' => $idx,
                         'law_meta' => [
-                            'title' => $title,
+                            'title' => $titleSnake,
                             'jurisdiction' => 'HR',
                             'country' => 'HR',
                             'language' => 'hr',
@@ -161,6 +162,8 @@ class ZakonHrIngestService
         $title = Str::replace(" -  Zakon.hr", '', $title);
         $slug = Str::slug($title);
         $titleSnake = Str::snake($title);
+        // Remove -_zakon_hr suffix if present
+        $titleSnake = preg_replace('/-?_?zakon_?hr$/i', '', $titleSnake);
         $datePub = $options['date'] ?? ($this->extractPublishedDate($html) ?? null);
         $dateDir = ($datePub ?: date('Y-m-d'));
         $baseDir = 'hr-laws/zakonhr/'.$slug.'/'.$dateDir;
@@ -176,7 +179,7 @@ class ZakonHrIngestService
         // Ensure IngestedLaw (skip when dry)
         $ingested = null;
         if (!$dry) {
-            $ingested = $this->ensureIngestedLaw($docId, $title, $sourceUrl, [
+            $ingested = $this->ensureIngestedLaw($docId, $titleSnake, $sourceUrl, [
                 'source' => 'zakon.hr',
                 'date_published' => $datePub,
                 'slug' => $slug,
@@ -192,32 +195,30 @@ class ZakonHrIngestService
                 $pdfFileName = $titleSnake.' - clanak-'.$articleNumber.'.pdf';
                 $pdfRel = $baseDir.'/'.$pdfFileName;
                 $this->renderer->renderArticle([
-                    'law_title' => $title,
+                    'law_title' => $titleSnake,
                     'law_eli' => '',
                     'law_pub_date' => $datePub ?: '',
                     'article_number' => $articleNumber,
                     'article_html' => $art['html'],
                     'generated_at' => gmdate('c'),
                     'generator_version' => '1.0.0',
-                    'search_tags' => array_values(array_filter([$title, 'članak '.$articleNumber, $datePub])),
+                    'search_tags' => array_values(array_filter([$titleSnake, 'članak '.$articleNumber, $datePub])),
                 ], Storage::path($pdfRel));
                 $this->recordLawUpload($ingested?->id, $docId.'-clanak-'.$articleNumber, $pdfRel, $pdfFileName, $sourceUrl);
                 $articlePdfAbs[] = Storage::path($pdfRel);
             }
 
+            // Generate enhanced metadata for this article
+            $enhancedMetadata = $this->generateArticleMetadata($titleSnake, $plain, $articleNumber, $sourceUrl, $datePub);
+
             $docs[] = [
                 'content' => $plain,
-                'metadata' => [
-                    'source' => 'zakon.hr',
-                    'url' => $sourceUrl,
-                    'title' => $title,
-                    'date_published' => $datePub,
-                    'article_number' => $articleNumber,
+                'metadata' => array_merge($enhancedMetadata, [
                     'heading_chain' => $art['heading_chain'] ?? [],
-                ],
-                'chunk_index' => 0,
+                ]),
+                'chunk_index' => $idx,
                 'law_meta' => [
-                    'title' => $title,
+                    'title' => $titleSnake,
                     'jurisdiction' => 'HR',
                     'country' => 'HR',
                     'language' => 'hr',
@@ -325,6 +326,9 @@ class ZakonHrIngestService
             ->first();
         if ($existing) return $existing;
 
+        // Generate enhanced aliases and keywords
+        $enhancedMeta = $this->generateEnhancedMetadata($title, $sourceUrl, $meta);
+
         return IngestedLaw::create([
             'id' => (string) Str::ulid(),
             'doc_id' => $docId,
@@ -333,11 +337,174 @@ class ZakonHrIngestService
             'country' => 'HR',
             'language' => 'hr',
             'source_url' => $sourceUrl,
-            'aliases' => array_values(array_filter([$docId, $sourceUrl])),
-            'keywords' => array_values(array_filter([$title, $meta['date_published'] ?? null, 'zakon.hr'])),
-            'keywords_text' => implode(' ', array_values(array_filter([$title, $meta['date_published'] ?? null, 'zakon.hr']))),
-            'metadata' => $meta,
+            'aliases' => $enhancedMeta['aliases'] ?? [],
+            'keywords' => $enhancedMeta['keywords'] ?? [],
+            'keywords_text' => implode(' ', $enhancedMeta['keywords'] ?? []),
+            'metadata' => array_merge($meta, $enhancedMeta),
             'ingested_at' => now(),
         ]);
+    }
+
+    /**
+     * Generate enhanced metadata using OpenAI for law ingestion
+     */
+    protected function generateEnhancedMetadata(string $title, ?string $sourceUrl, array $baseMeta = []): array
+    {
+        try {
+            $prompt = <<<PROMPT
+Extract metadata from this Croatian law title and information:
+
+Title: {$title}
+Source URL: {$sourceUrl}
+Published Date: {$baseMeta['date_published'] ?? 'unknown'}
+
+Generate a JSON response with:
+1. "aliases": Array of alternative names/abbreviations (e.g., full name, common abbreviations, Croatian and English names)
+2. "keywords": Array of relevant keywords (in Croatian, related to the law's subject matter)
+3. "law_code": Short code if identifiable (e.g., "ZKP", "OZ", "NN")
+4. "law_code_alias": Array of law code variations
+
+Example format:
+{
+  "aliases": ["Zakon o kaznenom postupku", "ZKP RH", "Criminal Procedure Act"],
+  "keywords": ["kazneni postupak", "sud", "optužnica", "pretraga", "dokazi"],
+  "law_code": "ZKP",
+  "law_code_alias": ["ZKP RH", "Zakon o kaznenom postupku"]
+}
+
+Return only valid JSON, no markdown formatting.
+PROMPT;
+
+            $response = $this->openai->chat([
+                ['role' => 'system', 'content' => 'You are a legal metadata extraction assistant. Always respond with valid JSON only.'],
+                ['role' => 'user', 'content' => $prompt],
+            ], config('openai.models.chat', 'gpt-4o-mini'), [
+                'temperature' => 0.3,
+                'max_tokens' => 500,
+            ]);
+
+            $content = $response['choices'][0]['message']['content'] ?? '{}';
+            // Remove markdown code fences if present
+            $content = preg_replace('/^```json\s*|\s*```$/m', '', trim($content));
+            $generated = json_decode($content, true);
+
+            if (!is_array($generated)) {
+                throw new \Exception('Invalid JSON response from OpenAI');
+            }
+
+            return [
+                'aliases' => array_values(array_unique(array_filter($generated['aliases'] ?? [$title]))),
+                'keywords' => array_values(array_unique(array_filter($generated['keywords'] ?? []))),
+                'law_code' => $generated['law_code'] ?? null,
+                'law_code_alias' => $generated['law_code_alias'] ?? [],
+            ];
+        } catch (\Throwable $e) {
+            Log::warning('Failed to generate enhanced metadata', ['title' => $title, 'error' => $e->getMessage()]);
+            // Fallback to simple metadata
+            return [
+                'aliases' => [$title],
+                'keywords' => [Str::before($title, '_'), 'zakon.hr'],
+                'law_code' => null,
+                'law_code_alias' => [],
+            ];
+        }
+    }
+
+    /**
+     * Generate enhanced metadata for individual article/chunk using OpenAI
+     */
+    protected function generateArticleMetadata(string $title, string $articleContent, string $articleNumber, ?string $sourceUrl, ?string $pubDate): array
+    {
+        try {
+            // Extract first ~500 chars of content for context
+            $contentPreview = Str::limit($articleContent, 500);
+
+            $prompt = <<<PROMPT
+Extract detailed metadata for this Croatian law article:
+
+Law Title: {$title}
+Article Number: {$articleNumber}
+Content Preview: {$contentPreview}
+Source URL: {$sourceUrl}
+Published: {$pubDate}
+
+Generate a JSON response with:
+1. "law_code": Short law code (e.g., "ZKP", "OZ", "ZOR")
+2. "law_code_alias": Array of variations (Croatian name, abbreviations, English name)
+3. "keywords": Array of 5-10 keywords from the article content
+4. "anchors": Array of 3-5 objects with "field" and "quote" showing evidence for metadata
+5. "confidence": Float 0-1 indicating metadata quality
+
+Example format:
+{
+  "law_code": "ZKP",
+  "law_code_alias": ["Zakon o kaznenom postupku", "ZKP", "Criminal Procedure Act"],
+  "keywords": ["kazneni postupak", "pretraga", "dokazi", "sud"],
+  "anchors": [
+    {"field": "vrsta", "quote": "Zakon o kaznenom postupku..."},
+    {"field": "ključne_riječi", "quote": "Pretraga doma i drugih prostora"}
+  ],
+  "confidence": 0.95
+}
+
+Return only valid JSON, no markdown formatting.
+PROMPT;
+
+            $response = $this->openai->chat([
+                ['role' => 'system', 'content' => 'You are a legal metadata extraction assistant. Always respond with valid JSON only.'],
+                ['role' => 'user', 'content' => $prompt],
+            ], config('openai.models.chat', 'gpt-4o-mini'), [
+                'temperature' => 0.2,
+                'max_tokens' => 800,
+            ]);
+
+            $content = $response['choices'][0]['message']['content'] ?? '{}';
+            $content = preg_replace('/^```json\s*|\s*```$/m', '', trim($content));
+            $generated = json_decode($content, true);
+
+            if (!is_array($generated)) {
+                throw new \Exception('Invalid JSON response from OpenAI');
+            }
+
+            return [
+                'source' => 'zakon.hr',
+                'url' => $sourceUrl,
+                'title' => $title,
+                'jurisdiction' => 'HR',
+                'type' => 'law',
+                'artifact' => 'none',
+                'date' => $pubDate ?: date('Y-m-d'),
+                'year_published' => $pubDate ? date('Y', strtotime($pubDate)) : date('Y'),
+                'article_number' => $articleNumber,
+                'law_code' => $generated['law_code'] ?? null,
+                'law_code_alias' => $generated['law_code_alias'] ?? [],
+                'keywords' => $generated['keywords'] ?? [],
+                'anchors' => $generated['anchors'] ?? [],
+                'confidence' => $generated['confidence'] ?? 0.8,
+            ];
+        } catch (\Throwable $e) {
+            Log::warning('Failed to generate article metadata', [
+                'title' => $title,
+                'article' => $articleNumber,
+                'error' => $e->getMessage()
+            ]);
+            // Fallback to basic metadata
+            return [
+                'source' => 'zakon.hr',
+                'url' => $sourceUrl,
+                'title' => $title,
+                'jurisdiction' => 'HR',
+                'type' => 'law',
+                'artifact' => 'none',
+                'date' => $pubDate ?: date('Y-m-d'),
+                'year_published' => $pubDate ? date('Y', strtotime($pubDate)) : date('Y'),
+                'article_number' => $articleNumber,
+                'law_code' => null,
+                'law_code_alias' => [],
+                'keywords' => [],
+                'anchors' => [],
+                'confidence' => 0.5,
+            ];
+        }
     }
 }
