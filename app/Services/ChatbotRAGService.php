@@ -24,7 +24,7 @@ class ChatbotRAGService
 
     public function __construct(
         protected QueryProcessingService $queryProcessor,
-        protected LegalEntityExtractor $entityExtractor,
+        protected HrLegalCitationsDetector $citationDetector,
         protected OpenAIService $openai,
         protected ?Neo4jService $neo4j = null
     ) {

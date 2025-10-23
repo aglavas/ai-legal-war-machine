@@ -13,7 +13,7 @@ class QueryProcessingService
 {
     public function __construct(
         protected OpenAIService $openai,
-        protected LegalEntityExtractor $extractor
+        protected HrLegalCitationsDetector $citationDetector
     ) {
     }
 
@@ -22,14 +22,17 @@ class QueryProcessingService
      */
     public function process(string $query, string $agentType = 'general'): array
     {
+        // Extract entities using robust Croatian legal citations detector
+        $entities = $this->citationDetector->extract($query);
+
         return [
             'original' => $query,
             'cleaned' => $this->cleanQuery($query),
             'rewritten' => $this->rewriteQuery($query, $agentType),
             'intent' => $this->classifyIntent($query),
-            'entities' => $this->extractor->extract($query),
-            'keywords' => $this->extractor->extractKeywords($query),
-            'has_specific_refs' => $this->extractor->hasSpecificReferences($query),
+            'entities' => $entities,
+            'keywords' => $this->citationDetector->extractKeywords($query),
+            'has_specific_refs' => $entities['has_specific_refs'] ?? false,
         ];
     }
 
