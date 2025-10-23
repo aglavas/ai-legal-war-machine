@@ -5,9 +5,11 @@ namespace App\Http\Livewire;
 use App\Models\IngestedLaw;
 use App\Models\Law;
 use App\Models\LawUpload;
+use App\Services\LawIngestService;
 use App\Services\ZakonHrScraper;
 use App\Services\ZakonHrIngestService;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 use Livewire\Component;
@@ -16,12 +18,6 @@ use Livewire\WithPagination;
 class IngestedLawsManager extends Component
 {
     use WithPagination;
-
-    public function __construct(
-        protected ZakonHrIngestService $ingestService
-    ) {
-        parent::__construct();
-    }
 
     public string $search = '';
     public string $sortField = 'ingested_at';
@@ -48,6 +44,8 @@ class IngestedLawsManager extends Component
     public int $importTotal = 0;
     public string $currentlyImporting = '';
 
+    protected ZakonHrIngestService $ingestService;
+
     protected $paginationTheme = 'tailwind';
 
     protected $queryString = [
@@ -57,6 +55,11 @@ class IngestedLawsManager extends Component
         'selectedIngestedId' => ['except' => null],
         'tab' => ['except' => 'laws'],
     ];
+
+    public function boot(ZakonHrIngestService $ingestService)
+    {
+        $this->ingestService = $ingestService;
+    }
 
     // ----- Rules
     protected function ingestedRules(): array
@@ -415,6 +418,7 @@ class IngestedLawsManager extends Component
             return;
         }
 
+        ini_set('max_execution_time', '600');
         $this->isImporting = true;
         $this->importTotal = count($this->selectedLawsToImport);
         $this->importProgress = 0;
@@ -432,7 +436,7 @@ class IngestedLawsManager extends Component
                 ),
             ]);
         } catch (\Exception $e) {
-            \Log::error('Failed to import laws', [
+            Log::error('Failed to import laws', [
                 'urls' => $this->selectedLawsToImport,
                 'error' => $e->getMessage(),
             ]);
