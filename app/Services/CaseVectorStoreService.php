@@ -18,7 +18,7 @@ class CaseVectorStoreService
     /**
      * @param string $caseId ULID of the LegalCase
      * @param string $docId Group identifier for this document within the case (e.g., decision ID or ECLI)
-     * @param array<int,array{content:string,metadata?:array,chunk_index?:int}> $docs
+     * @param array<int,array{content:string,metadata?:array,actual?:array,chunk_index?:int}> $docs
      * @param array $options model, provider, upload_id
      */
     public function ingest(string $caseId, string $docId, array $docs, array $options = []): array
@@ -65,6 +65,7 @@ class CaseVectorStoreService
                     'upload_id' => $uploadId,
                     'content' => $content,
                     'metadata' => isset($doc['metadata']) ? json_encode($doc['metadata']) : null,
+                    'actual' => isset($doc['actual']) ? json_encode($doc['actual']) : null,
                     'source' => $doc['source'] ?? null,
                     'source_id' => $doc['source_id'] ?? null,
                     'chunk_index' => (int)($doc['chunk_index'] ?? 0),

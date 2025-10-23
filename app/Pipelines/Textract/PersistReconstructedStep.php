@@ -5,6 +5,7 @@ namespace App\Pipelines\Textract;
 use App\Models\CaseDocument;
 use App\Models\CaseDocumentUpload;
 use App\Models\LegalCase;
+use App\Services\Ocr\LegalMetadataExtractor;
 use App\Services\OpenAIService;
 use Closure;
 use Illuminate\Support\Facades\Log;
@@ -13,6 +14,10 @@ use Illuminate\Support\Str;
 
 class PersistReconstructedStep
 {
+    public function __construct(
+        private LegalMetadataExtractor $metadataExtractor
+    ) {}
+
     public function handle(array $payload, Closure $next): mixed
     {
         $driveFileId = (string) $payload['driveFileId'];
@@ -72,6 +77,33 @@ class PersistReconstructedStep
 
         $fullText = trim($fullText);
 
+        // Get legal metadata from payload (already extracted by CreateMetadataStep)
+        // or extract it if not available (standalone usage)
+        // This provides the same rich metadata as TextractJob (citations, courts, parties, etc.)
+        $legalMetadata = $payload['legalMetadata'] ?? null;
+
+        if (!$legalMetadata && $doc) {
+            try {
+                $legalMetadata = $this->metadataExtractor->extract(
+                    document: $doc,
+                    driveFileId: $driveFileId,
+                    driveFileName: $fileName
+                );
+                Log::info('Legal metadata extracted for case document', [
+                    'driveFileId' => $driveFileId,
+                    'documentType' => $legalMetadata->documentType,
+                    'totalCitations' => $legalMetadata->totalCitations,
+                    'courts' => count($legalMetadata->courts),
+                    'parties' => count($legalMetadata->parties),
+                ]);
+            } catch (\Throwable $e) {
+                Log::warning('Legal metadata extraction failed', [
+                    'driveFileId' => $driveFileId,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
+
         // Chunking
         $chunkCfg = config('vizra-adk.vector_memory.chunking', []);
         $size = (int) ($chunkCfg['chunk_size'] ?? 1000);
@@ -125,6 +157,7 @@ class PersistReconstructedStep
                     'local_json_path' => $jsonPath ? ltrim(Str::replaceFirst($localRoot, '', $jsonPath), '/') : null,
                     'local_pdf_path' => $localRel,
                 ],
+                'actual' => $legalMetadata?->toArray(),
                 'source' => 'drive-textract',
                 'source_id' => $driveFileId,
                 'embedding_provider' => $embeddingProvider,
