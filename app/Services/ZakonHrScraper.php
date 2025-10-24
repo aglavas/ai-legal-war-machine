@@ -59,21 +59,105 @@ class ZakonHrScraper
      */
     public function scrapeCategoryPage(string $url): array
     {
-        $response = Http::timeout(30)
-            ->withHeaders([
-                'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                'Accept' => 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                'Accept-Language' => 'hr-HR,hr;q=0.9,en-US;q=0.8,en;q=0.7',
-            ])
-            ->get($url);
+        $html = $this->fetchWithRetry($url, 'category_page');
+        return $this->parseHtml($html);
+    }
 
-        if (!$response->successful()) {
-            throw new \Exception("Failed to fetch URL: {$url}. Status: {$response->status()}");
+    /**
+     * Fetch URL with exponential backoff and jitter
+     *
+     * @param string $url
+     * @param string $context
+     * @param int $maxRetries
+     * @return string
+     * @throws \Exception
+     */
+    protected function fetchWithRetry(string $url, string $context, int $maxRetries = 3): string
+    {
+        $attempt = 0;
+        $lastException = null;
+
+        while ($attempt < $maxRetries) {
+            $attempt++;
+
+            try {
+                $response = Http::timeout(30)
+                    ->withHeaders([
+                        'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                        'Accept' => 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                        'Accept-Language' => 'hr-HR,hr;q=0.9,en-US;q=0.8,en;q=0.7',
+                    ])
+                    ->get($url);
+
+                if ($response->successful()) {
+                    if ($attempt > 1) {
+                        Log::info('HTTP request succeeded after retry', [
+                            'url' => $url,
+                            'context' => $context,
+                            'attempt' => $attempt,
+                            'total_attempts' => $attempt,
+                        ]);
+                    }
+                    return $response->body();
+                }
+
+                throw new \Exception("HTTP {$response->status()}: {$response->body()}");
+
+            } catch (\Exception $e) {
+                $lastException = $e;
+
+                Log::warning('HTTP request failed', [
+                    'url' => $url,
+                    'context' => $context,
+                    'attempt' => $attempt,
+                    'max_retries' => $maxRetries,
+                    'error' => $e->getMessage(),
+                ]);
+
+                // Don't sleep after the last attempt
+                if ($attempt < $maxRetries) {
+                    $delay = $this->calculateBackoffDelay($attempt);
+                    Log::debug('Retrying after delay', [
+                        'url' => $url,
+                        'delay_ms' => $delay,
+                        'next_attempt' => $attempt + 1,
+                    ]);
+                    usleep($delay * 1000); // Convert ms to microseconds
+                }
+            }
         }
 
-        $html = $response->body();
+        // All retries exhausted
+        Log::error('HTTP request failed after all retries', [
+            'url' => $url,
+            'context' => $context,
+            'total_attempts' => $attempt,
+            'error' => $lastException->getMessage(),
+        ]);
 
-        return $this->parseHtml($html);
+        throw new \Exception(
+            "Failed to fetch URL after {$maxRetries} attempts: {$url}. Last error: {$lastException->getMessage()}",
+            0,
+            $lastException
+        );
+    }
+
+    /**
+     * Calculate exponential backoff delay with jitter
+     *
+     * @param int $attempt Attempt number (1-based)
+     * @return int Delay in milliseconds
+     */
+    protected function calculateBackoffDelay(int $attempt): int
+    {
+        // Exponential backoff: base_delay * 2^(attempt-1)
+        $baseDelay = 1000; // 1 second
+        $exponentialDelay = $baseDelay * pow(2, $attempt - 1);
+
+        // Add jitter: random value between 0 and 50% of the delay
+        $jitter = rand(0, (int)($exponentialDelay * 0.5));
+
+        return (int)($exponentialDelay + $jitter);
     }
 
     /**
@@ -202,19 +286,7 @@ class ZakonHrScraper
      */
     public function scrapeLawContent(string $url): array
     {
-        $response = Http::timeout(60)
-            ->withHeaders([
-                'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                'Accept' => 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                'Accept-Language' => 'hr-HR,hr;q=0.9,en-US;q=0.8,en;q=0.7',
-            ])
-            ->get($url);
-
-        if (!$response->successful()) {
-            throw new \Exception("Failed to fetch law content from: {$url}. Status: {$response->status()}");
-        }
-
-        $html = $response->body();
+        $html = $this->fetchWithRetry($url, 'law_content');
         $crawler = new Crawler($html);
 
         $content = [];
