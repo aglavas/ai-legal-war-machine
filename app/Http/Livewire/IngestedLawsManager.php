@@ -157,24 +157,38 @@ class IngestedLawsManager extends Component
         $this->resetValidation();
         $model = IngestedLaw::findOrFail($id);
         $this->editingIngested = $model->toArray();
-        // Convert metadata array to JSON string for textarea
-        if (isset($this->editingIngested['metadata']) && is_array($this->editingIngested['metadata'])) {
-            $this->editingIngested['metadata'] = json_encode($this->editingIngested['metadata'], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+
+        // Convert array fields to JSON strings for textarea display
+        if (isset($this->editingIngested['aliases']) && is_array($this->editingIngested['aliases'])) {
+            $this->editingIngested['aliases'] = json_encode($this->editingIngested['aliases'], JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
         }
+        if (isset($this->editingIngested['keywords']) && is_array($this->editingIngested['keywords'])) {
+            $this->editingIngested['keywords'] = json_encode($this->editingIngested['keywords'], JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+        }
+        if (isset($this->editingIngested['metadata']) && is_array($this->editingIngested['metadata'])) {
+            $this->editingIngested['metadata'] = json_encode($this->editingIngested['metadata'], JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+        }
+
         $this->showIngestedModal = true;
     }
 
     public function saveIngested(): void
     {
-        $this->validate($this->ingestedRules());
-
-        // Convert metadata JSON string back to array
+        // Convert JSON string fields back to arrays BEFORE validation
+        if (isset($this->editingIngested['aliases']) && is_string($this->editingIngested['aliases'])) {
+            $decoded = json_decode($this->editingIngested['aliases'], true);
+            $this->editingIngested['aliases'] = $decoded ?? [];
+        }
+        if (isset($this->editingIngested['keywords']) && is_string($this->editingIngested['keywords'])) {
+            $decoded = json_decode($this->editingIngested['keywords'], true);
+            $this->editingIngested['keywords'] = $decoded ?? [];
+        }
         if (isset($this->editingIngested['metadata']) && is_string($this->editingIngested['metadata'])) {
             $decoded = json_decode($this->editingIngested['metadata'], true);
-            if (json_last_error() === JSON_ERROR_NONE) {
-                $this->editingIngested['metadata'] = $decoded;
-            }
+            $this->editingIngested['metadata'] = $decoded ?? [];
         }
+
+        $this->validate($this->ingestedRules());
 
         if (empty($this->editingIngested['id'])) {
             $this->editingIngested['id'] = (string) Str::ulid();
@@ -239,10 +253,15 @@ class IngestedLawsManager extends Component
         $this->resetValidation();
         $model = Law::findOrFail($id);
         $this->editingLaw = $model->toArray();
-        // Convert metadata array to JSON string for textarea
-        if (isset($this->editingLaw['metadata']) && is_array($this->editingLaw['metadata'])) {
-            $this->editingLaw['metadata'] = json_encode($this->editingLaw['metadata'], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+
+        // Convert array fields to JSON strings for textarea display
+        if (isset($this->editingLaw['tags']) && is_array($this->editingLaw['tags'])) {
+            $this->editingLaw['tags'] = json_encode($this->editingLaw['tags'], JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
         }
+        if (isset($this->editingLaw['metadata']) && is_array($this->editingLaw['metadata'])) {
+            $this->editingLaw['metadata'] = json_encode($this->editingLaw['metadata'], JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+        }
+
         $this->showLawModal = true;
     }
 
@@ -250,15 +269,17 @@ class IngestedLawsManager extends Component
     {
         if (!$this->selectedIngestedId) return;
 
-        $this->validate($this->lawRules());
-
-        // Convert metadata JSON string back to array
+        // Convert JSON string fields back to arrays BEFORE validation
+        if (isset($this->editingLaw['tags']) && is_string($this->editingLaw['tags'])) {
+            $decoded = json_decode($this->editingLaw['tags'], true);
+            $this->editingLaw['tags'] = $decoded ?? [];
+        }
         if (isset($this->editingLaw['metadata']) && is_string($this->editingLaw['metadata'])) {
             $decoded = json_decode($this->editingLaw['metadata'], true);
-            if (json_last_error() === JSON_ERROR_NONE) {
-                $this->editingLaw['metadata'] = $decoded;
-            }
+            $this->editingLaw['metadata'] = $decoded ?? [];
         }
+
+        $this->validate($this->lawRules());
 
         $isCreate = empty($this->editingLaw['id']);
         $driver = DB::connection()->getDriverName();
