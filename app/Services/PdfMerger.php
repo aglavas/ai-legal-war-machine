@@ -14,30 +14,44 @@ class PdfMerger
     {
         @mkdir(dirname($destPath), 0775, true);
 
-        $pdf = new Fpdi();
-        $pdf->setPrintHeader(false);
-        $pdf->setPrintFooter(false);
-        $pdf->SetAutoPageBreak(false);
-        $pdf->SetCreator('Laravel PDF Merger');
-        $pdf->SetAuthor('Laravel App');
+        // Temporarily increase memory limit for PDF merging operations
+        $originalLimit = ini_get('memory_limit');
+        ini_set('memory_limit', '512M');
 
-        foreach ($pdfPaths as $path) {
-            if (!is_file($path)) continue;
-            try {
-                $pageCount = $pdf->setSourceFile($path);
-            } catch (\Throwable $e) {
-                continue;
+        try {
+            $pdf = new Fpdi();
+            $pdf->setPrintHeader(false);
+            $pdf->setPrintFooter(false);
+            $pdf->SetAutoPageBreak(false);
+            $pdf->SetCreator('Laravel PDF Merger');
+            $pdf->SetAuthor('Laravel App');
+
+            foreach ($pdfPaths as $path) {
+                if (!is_file($path)) continue;
+                try {
+                    $pageCount = $pdf->setSourceFile($path);
+                } catch (\Throwable $e) {
+                    continue;
+                }
+                for ($pageNo = 1; $pageNo <= $pageCount; $pageNo++) {
+                    $tplId = $pdf->importPage($pageNo);
+                    $size = $pdf->getTemplateSize($tplId);
+                    $orientation = ($size['width'] > $size['height']) ? 'L' : 'P';
+                    $pdf->AddPage($orientation, [$size['width'], $size['height']]);
+                    $pdf->useTemplate($tplId, 0, 0, $size['width'], $size['height'], true);
+                }
             }
-            for ($pageNo = 1; $pageNo <= $pageCount; $pageNo++) {
-                $tplId = $pdf->importPage($pageNo);
-                $size = $pdf->getTemplateSize($tplId);
-                $orientation = ($size['width'] > $size['height']) ? 'L' : 'P';
-                $pdf->AddPage($orientation, [$size['width'], $size['height']]);
-                $pdf->useTemplate($tplId, 0, 0, $size['width'], $size['height'], true);
-            }
+
+            $pdf->Output($destPath, 'F');
+
+            // Clean up memory after PDF generation
+            unset($pdf);
+            gc_collect_cycles();
+
+            return $destPath;
+        } finally {
+            // Always restore original memory limit
+            ini_set('memory_limit', $originalLimit);
         }
-
-        $pdf->Output($destPath, 'F');
-        return $destPath;
     }
 }
