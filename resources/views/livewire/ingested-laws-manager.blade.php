@@ -138,6 +138,7 @@
                                         <tr>
                                             <th>ID</th>
                                             <th>Title</th>
+                                            <th>Article #</th>
                                             <th>Chunk</th>
                                             <th>Lang</th>
                                             <th>Updated</th>
@@ -149,10 +150,20 @@
                                             <tr>
                                                 <td><span style="font-family:monospace; font-size:11px">{{ \Illuminate\Support\Str::limit($law->id, 8, '') }}</span></td>
                                                 <td>{{ $law->title ?? '—' }}</td>
+                                                <td>
+                                                    @if(isset($law->metadata['article_number']))
+                                                        <span class="chip info" style="padding:4px 8px">Art. {{ $law->metadata['article_number'] }}</span>
+                                                    @else
+                                                        <span class="text-muted">—</span>
+                                                    @endif
+                                                </td>
                                                 <td><span class="chip" style="padding:4px 8px">#{{ $law->chunk_index }}</span></td>
                                                 <td>{{ strtoupper($law->language ?? '—') }}</td>
                                                 <td class="text-muted text-xs">{{ $law->updated_at?->diffForHumans() }}</td>
                                                 <td class="actions">
+                                                    <button wire:click="viewLaw('{{ $law->id }}')" class="btn info" style="font-size:11px; padding:5px 9px">
+                                                        👁️ View
+                                                    </button>
                                                     <button wire:click="editLaw('{{ $law->id }}')" class="btn" style="font-size:11px; padding:5px 9px">
                                                         ✏️ Edit
                                                     </button>
@@ -163,7 +174,7 @@
                                             </tr>
                                         @empty
                                             <tr>
-                                                <td colspan="6" class="text-center text-muted" style="padding:40px 20px">
+                                                <td colspan="7" class="text-center text-muted" style="padding:40px 20px">
                                                     <div style="font-size:36px; margin-bottom:8px; opacity:0.5">📄</div>
                                                     No law chunks yet.
                                                 </td>
@@ -301,8 +312,11 @@
                     </div>
                     <div class="form-group span-2">
                         <label>Metadata (JSON)</label>
-                        <textarea wire:model.defer="editingIngested.metadata" rows="3" placeholder='{"key": "value"}'></textarea>
+                        <textarea wire:model.defer="editingIngested.metadata" rows="6" placeholder='{"key": "value"}' style="font-family: monospace; font-size: 12px;"></textarea>
                         @error('editingIngested.metadata') <div class="error-text">{{ $message }}</div> @enderror
+                        <div class="text-xs text-muted" style="margin-top:4px">
+                            Enter valid JSON. Example: {"law_code": "ZKP", "aliases": ["Criminal Procedure Act"]}
+                        </div>
                     </div>
                 </div>
                 <div class="form-actions">
@@ -351,8 +365,11 @@
                     </div>
                     <div class="form-group span-2">
                         <label>Metadata (JSON)</label>
-                        <textarea wire:model.defer="editingLaw.metadata" rows="3" placeholder='{"key": "value"}'></textarea>
+                        <textarea wire:model.defer="editingLaw.metadata" rows="8" placeholder='{"key": "value"}' style="font-family: monospace; font-size: 12px;"></textarea>
                         @error('editingLaw.metadata') <div class="error-text">{{ $message }}</div> @enderror
+                        <div class="text-xs text-muted" style="margin-top:4px">
+                            Enter valid JSON. Includes: article_number, law_code, keywords, anchors, etc.
+                        </div>
                     </div>
                 </div>
                 <div class="form-actions">
@@ -360,6 +377,80 @@
                     <button type="submit" class="btn primary">💾 Save</button>
                 </div>
             </form>
+        </div>
+    </div>
+
+    {{-- Modal: View Law Chunk --}}
+    <div x-data="{ open: @entangle('showLawViewModal') }" x-cloak x-show="open" class="modal-backdrop" @click.self="open=false">
+        <div class="modal" @click.stop style="max-width:900px">
+            <div class="modal-header">
+                <h2>👁️ View Law Chunk</h2>
+                <button @click="open=false" class="btn error" style="padding:6px 12px">✕ Close</button>
+            </div>
+            <div class="modal-body">
+                @if(!empty($viewingLaw))
+                    <div class="seg" style="margin-bottom:16px">
+                        <div style="display:grid; grid-template-columns: 150px 1fr; gap:12px; font-size:14px">
+                            <div style="font-weight:600; color:var(--muted)">ID:</div>
+                            <div style="font-family:monospace; font-size:12px">{{ $viewingLaw['id'] ?? '—' }}</div>
+
+                            <div style="font-weight:600; color:var(--muted)">Doc ID:</div>
+                            <div style="font-family:monospace; font-size:12px">{{ $viewingLaw['doc_id'] ?? '—' }}</div>
+
+                            <div style="font-weight:600; color:var(--muted)">Title:</div>
+                            <div>{{ $viewingLaw['title'] ?? '—' }}</div>
+
+                            @if(isset($viewingLaw['metadata']['article_number']))
+                                <div style="font-weight:600; color:var(--muted)">Article Number:</div>
+                                <div><span class="chip info" style="padding:6px 12px">Article {{ $viewingLaw['metadata']['article_number'] }}</span></div>
+                            @endif
+
+                            <div style="font-weight:600; color:var(--muted)">Chunk Index:</div>
+                            <div><span class="chip" style="padding:6px 12px">#{{ $viewingLaw['chunk_index'] ?? 0 }}</span></div>
+
+                            <div style="font-weight:600; color:var(--muted)">Jurisdiction:</div>
+                            <div>{{ $viewingLaw['jurisdiction'] ?? '—' }}</div>
+
+                            <div style="font-weight:600; color:var(--muted)">Language:</div>
+                            <div>{{ strtoupper($viewingLaw['language'] ?? '—') }}</div>
+
+                            @if(!empty($viewingLaw['source_url']))
+                                <div style="font-weight:600; color:var(--muted)">Source URL:</div>
+                                <div><a href="{{ $viewingLaw['source_url'] }}" target="_blank" class="text-accent">{{ $viewingLaw['source_url'] }}</a></div>
+                            @endif
+                        </div>
+                    </div>
+
+                    <div class="seg" style="margin-bottom:16px">
+                        <div style="font-weight:600; margin-bottom:8px; color:var(--muted)">Content:</div>
+                        <div style="background:#0b1220; padding:16px; border-radius:8px; border:1px solid var(--border); max-height:400px; overflow-y:auto; white-space:pre-wrap; font-family:monospace; font-size:12px; line-height:1.6">{{ $viewingLaw['content'] ?? 'No content' }}</div>
+                    </div>
+
+                    @if(!empty($viewingLaw['metadata']) && is_array($viewingLaw['metadata']))
+                        <div class="seg">
+                            <div style="font-weight:600; margin-bottom:12px; color:var(--muted)">Metadata:</div>
+                            <div style="background:#0b1220; padding:16px; border-radius:8px; border:1px solid var(--border); max-height:300px; overflow-y:auto">
+                                <table style="width:100%; font-size:13px">
+                                    <tbody>
+                                        @foreach($viewingLaw['metadata'] as $key => $value)
+                                            <tr style="border-bottom:1px solid rgba(255,255,255,0.05)">
+                                                <td style="padding:8px; font-weight:600; color:var(--accent); vertical-align:top; width:200px">{{ $key }}</td>
+                                                <td style="padding:8px; color:var(--text); font-family:monospace; font-size:11px">
+                                                    @if(is_array($value))
+                                                        <pre style="margin:0; white-space:pre-wrap">{{ json_encode($value, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE) }}</pre>
+                                                    @else
+                                                        {{ $value ?? '—' }}
+                                                    @endif
+                                                </td>
+                                            </tr>
+                                        @endforeach
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    @endif
+                @endif
+            </div>
         </div>
     </div>
 
@@ -621,4 +712,71 @@
             });
         });
     </script>
+
+    {{-- Custom Pagination Styling --}}
+    <style>
+        .pagination {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            justify-content: center;
+            padding: 16px 0;
+        }
+
+        .pagination nav {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .pagination nav span,
+        .pagination nav a {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 36px;
+            height: 36px;
+            padding: 6px 12px;
+            border-radius: 6px;
+            font-size: 13px;
+            font-weight: 500;
+            text-decoration: none;
+            transition: all 0.2s ease;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            background: rgba(255, 255, 255, 0.03);
+            color: #94a3b8;
+        }
+
+        .pagination nav a:hover {
+            background: rgba(59, 130, 246, 0.15);
+            border-color: rgba(59, 130, 246, 0.3);
+            color: #60a5fa;
+            transform: translateY(-1px);
+        }
+
+        .pagination nav span[aria-current="page"] {
+            background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+            border-color: #3b82f6;
+            color: #ffffff;
+            font-weight: 600;
+            box-shadow: 0 2px 8px rgba(59, 130, 246, 0.3);
+        }
+
+        .pagination nav span[aria-disabled="true"] {
+            opacity: 0.3;
+            cursor: not-allowed;
+            background: rgba(255, 255, 255, 0.02);
+        }
+
+        .pagination nav a[rel="prev"],
+        .pagination nav a[rel="next"] {
+            font-weight: 600;
+            padding: 6px 14px;
+        }
+
+        .pagination nav a[rel="prev"]:hover,
+        .pagination nav a[rel="next"]:hover {
+            background: rgba(59, 130, 246, 0.2);
+        }
+    </style>
 </div>
