@@ -2,12 +2,13 @@
 
 namespace App\Services;
 
+use App\Jobs\GenerateLawMetadata;
+use App\Models\IngestedLaw;
 use App\Models\LawUpload;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
-use App\Models\IngestedLaw; // add import
 
 class ZakonHrIngestService
 {
@@ -130,6 +131,11 @@ class ZakonHrIngestService
                         'ingested_law_id' => $ingested?->id,
                     ]);
                     $totalInserted += (int)($res['inserted'] ?? 0);
+
+                    // Dispatch AI metadata generation job (once per law, not per article!)
+                    if ($ingested && !empty($docs)) {
+                        $this->dispatchMetadataGeneration($ingested->id, $docs);
+                    }
                 }
                 $processed++;
             } catch (\Throwable $e) {
@@ -248,6 +254,11 @@ class ZakonHrIngestService
                 'ingested_law_id' => $ingested?->id,
             ]);
             $totalInserted += (int)($res['inserted'] ?? 0);
+
+            // Dispatch AI metadata generation job (once per law, not per article!)
+            if ($ingested && !empty($docs)) {
+                $this->dispatchMetadataGeneration($ingested->id, $docs);
+            }
         }
 
         return [
@@ -338,6 +349,40 @@ class ZakonHrIngestService
             'keywords_text' => implode(' ', array_values(array_filter([$title, $meta['date_published'] ?? null, 'zakon.hr']))),
             'metadata' => $meta,
             'ingested_at' => now(),
+        ]);
+    }
+
+    /**
+     * Dispatch metadata generation job with environment-aware queue selection.
+     * Uses sync queue for development, async (database) for production.
+     *
+     * This is the CORRECT approach: Call OpenAI ONCE per law, not per article!
+     */
+    protected function dispatchMetadataGeneration(string $ingestedLawId, array $docs): void
+    {
+        // Extract article data needed for metadata generation
+        $articles = [];
+        foreach ($docs as $doc) {
+            $articles[] = [
+                'content' => $doc['content'] ?? '',
+                'article_number' => $doc['metadata']['article_number'] ?? null,
+                'heading_chain' => $doc['metadata']['heading_chain'] ?? [],
+            ];
+        }
+
+        // Environment-aware queue selection:
+        // - Development: 'sync' (execute immediately, easier debugging)
+        // - Production: 'database' (async, better performance)
+        $queueConnection = app()->environment('production') ? 'database' : 'sync';
+
+        GenerateLawMetadata::dispatch($ingestedLawId, $articles)
+            ->onConnection($queueConnection)
+            ->onQueue('metadata-generation');
+
+        Log::info('ZakonHrIngestService: Dispatched metadata generation job', [
+            'ingested_law_id' => $ingestedLawId,
+            'article_count' => count($articles),
+            'queue_connection' => $queueConnection,
         ]);
     }
 }
