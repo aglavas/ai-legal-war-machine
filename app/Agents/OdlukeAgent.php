@@ -2,6 +2,11 @@
 
 namespace App\Agents;
 
+use App\Tools\LawArticleByIdTool;
+use App\Tools\LawArticlesSearchTool;
+use App\Tools\OdlukeDownloadTool;
+use App\Tools\OdlukeMetaTool;
+use App\Tools\OdlukeSearchTool;
 use Vizra\VizraADK\Agents\BaseLlmAgent;
 
 class OdlukeAgent extends BaseLlmAgent
@@ -16,8 +21,14 @@ class OdlukeAgent extends BaseLlmAgent
 
     protected int $maxSteps = 8;
 
-    // Must match the configured MCP server key in vizra-adk.mcp_servers
-    protected array $mcpServers = ['odluke'];
+    // Use direct tools instead of MCP servers (works in all contexts: HTTP, dashboard, artisan)
+    protected array $tools = [
+        OdlukeSearchTool::class,
+        OdlukeMetaTool::class,
+        OdlukeDownloadTool::class,
+        LawArticlesSearchTool::class,
+        LawArticleByIdTool::class,
+    ];
 
     protected bool $showInChatUi = true;
 
@@ -37,11 +48,13 @@ class OdlukeAgent extends BaseLlmAgent
     {
         $today = date('Y-m-d');
         return <<<SYS
-You are an autonomous legal-research assistant specialized in Croatian court decisions hosted at odluke.sudovi.hr.
-You have MCP tools available on the server named "odluke" with these capabilities:
-- odluke-search: search the list endpoint and return IDs with paging and optional filters (q, params, page, limit, base_url)
-- odluke-meta: fetch metadata for one or more IDs (id or ids[], base_url)
-- odluke-download: get direct download URLs and optionally save PDF/HTML locally (id, format in {pdf|html|both}, save, base_url)
+You are an autonomous legal-research assistant specialized in Croatian court decisions and laws.
+You have these tools available:
+- odluke_search: search the list endpoint and return IDs with paging and optional filters (q, params, page, limit, base_url)
+- odluke_meta: fetch metadata for one or more IDs (id or ids[], base_url)
+- odluke_download: get direct download URLs and optionally save PDF/HTML locally (id, format in {pdf|html|both}, save, base_url)
+- law_articles_search: search Croatian laws and law articles by query, law_number, title (limit 1-100)
+- law_article_by_id: get a specific law article by its ID
 
 Operating rules:
 1) If key constraints are missing, briefly ask for them; otherwise proceed. Useful filters:

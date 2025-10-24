@@ -4,6 +4,7 @@ use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\OpenAIController;
 use App\Http\Controllers\UploadController;
 use App\Http\Controllers\IngestController;
+use App\Http\Controllers\McpOpenAIController;
 
 Route::prefix('openai')->group(function () {
     Route::post('responses', [OpenAIController::class, 'responses']);
@@ -50,4 +51,24 @@ Route::prefix('uploads')->group(function () {
         ->where(['index' => '[0-9]+']);
     Route::post('{uploadId}/complete', [UploadController::class, 'complete']);
     Route::delete('{uploadId}', [UploadController::class, 'cancel']);
+});
+
+// MCP-OpenAI Bridge: Exposes MCP tools as OpenAI-compatible function calling endpoints
+Route::prefix('mcp-openai')->group(function () {
+    // Public info endpoint (no auth required, with rate limiting)
+    Route::get('info', [McpOpenAIController::class, 'info'])
+        ->middleware('throttle:60,1');
+
+    // Protected endpoints - require API token authentication and rate limiting
+    Route::middleware(['mcp.auth', 'throttle:60,1'])->group(function () {
+        // Tool discovery and execution
+        Route::get('tools', [McpOpenAIController::class, 'listTools']);
+        Route::post('tools/execute', [McpOpenAIController::class, 'executeTool']);
+
+        // OpenAI-compatible chat completions with automatic MCP tools injection
+        Route::post('chat/completions', [McpOpenAIController::class, 'chatCompletions']);
+
+        // Webhook endpoint for OpenAI function calling callbacks
+        Route::post('webhook', [McpOpenAIController::class, 'webhook']);
+    });
 });
