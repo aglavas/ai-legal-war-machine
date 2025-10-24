@@ -28,10 +28,12 @@ class IngestedLawsManager extends Component
     public bool $showIngestedModal = false;
     public bool $showLawModal = false;
     public bool $showUploadModal = false;
+    public bool $showLawViewModal = false;
 
     public array $editingIngested = [];
     public array $editingLaw = [];
     public array $editingUpload = [];
+    public array $viewingLaw = [];
 
     // Scraping
     public bool $showScraperModal = false;
@@ -155,12 +157,24 @@ class IngestedLawsManager extends Component
         $this->resetValidation();
         $model = IngestedLaw::findOrFail($id);
         $this->editingIngested = $model->toArray();
+        // Convert metadata array to JSON string for textarea
+        if (isset($this->editingIngested['metadata']) && is_array($this->editingIngested['metadata'])) {
+            $this->editingIngested['metadata'] = json_encode($this->editingIngested['metadata'], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+        }
         $this->showIngestedModal = true;
     }
 
     public function saveIngested(): void
     {
         $this->validate($this->ingestedRules());
+
+        // Convert metadata JSON string back to array
+        if (isset($this->editingIngested['metadata']) && is_string($this->editingIngested['metadata'])) {
+            $decoded = json_decode($this->editingIngested['metadata'], true);
+            if (json_last_error() === JSON_ERROR_NONE) {
+                $this->editingIngested['metadata'] = $decoded;
+            }
+        }
 
         if (empty($this->editingIngested['id'])) {
             $this->editingIngested['id'] = (string) Str::ulid();
@@ -225,6 +239,10 @@ class IngestedLawsManager extends Component
         $this->resetValidation();
         $model = Law::findOrFail($id);
         $this->editingLaw = $model->toArray();
+        // Convert metadata array to JSON string for textarea
+        if (isset($this->editingLaw['metadata']) && is_array($this->editingLaw['metadata'])) {
+            $this->editingLaw['metadata'] = json_encode($this->editingLaw['metadata'], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+        }
         $this->showLawModal = true;
     }
 
@@ -233,6 +251,14 @@ class IngestedLawsManager extends Component
         if (!$this->selectedIngestedId) return;
 
         $this->validate($this->lawRules());
+
+        // Convert metadata JSON string back to array
+        if (isset($this->editingLaw['metadata']) && is_string($this->editingLaw['metadata'])) {
+            $decoded = json_decode($this->editingLaw['metadata'], true);
+            if (json_last_error() === JSON_ERROR_NONE) {
+                $this->editingLaw['metadata'] = $decoded;
+            }
+        }
 
         $isCreate = empty($this->editingLaw['id']);
         $driver = DB::connection()->getDriverName();
@@ -272,6 +298,13 @@ class IngestedLawsManager extends Component
         $law->save();
 
         $this->showLawModal = false;
+    }
+
+    public function viewLaw(string $id): void
+    {
+        $model = Law::findOrFail($id);
+        $this->viewingLaw = $model->toArray();
+        $this->showLawViewModal = true;
     }
 
     public function deleteLaw(string $id): void
