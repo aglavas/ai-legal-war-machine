@@ -2,6 +2,7 @@
 
 namespace App\Tools;
 
+use App\Mcp\ToolSchemas;
 use App\Services\Mcp\InternalMcpClient;
 use Vizra\VizraADK\Tools\BaseTool;
 
@@ -11,7 +12,7 @@ use Vizra\VizraADK\Tools\BaseTool;
 class LawArticleByIdTool extends BaseTool
 {
     protected string $name = 'law_article_by_id';
-    protected string $description = 'Dohvati jedan članak zakona po ID-u';
+    protected string $description;
 
     protected InternalMcpClient $client;
 
@@ -19,20 +20,17 @@ class LawArticleByIdTool extends BaseTool
     {
         parent::__construct();
         $this->client = app(InternalMcpClient::class);
+
+        // Get description from centralized schema
+        $schema = ToolSchemas::get('law-article-by-id');
+        $this->description = $schema['description'] ?? 'Law Article By ID Tool';
     }
 
     public function getInputSchema(): array
     {
-        return [
-            'type' => 'object',
-            'properties' => [
-                'id' => [
-                    'type' => 'string',
-                    'description' => 'Law article ID (ULID)',
-                ],
-            ],
-            'required' => ['id'],
-        ];
+        // Use centralized schema definition
+        $schema = ToolSchemas::get('law-article-by-id');
+        return $schema['inputSchema'] ?? ['type' => 'object'];
     }
 
     public function execute(array $arguments): string

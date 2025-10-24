@@ -55,16 +55,20 @@ Route::prefix('uploads')->group(function () {
 
 // MCP-OpenAI Bridge: Exposes MCP tools as OpenAI-compatible function calling endpoints
 Route::prefix('mcp-openai')->group(function () {
-    // Public info endpoint (no auth required)
-    Route::get('info', [McpOpenAIController::class, 'info']);
+    // Public info endpoint (no auth required, with rate limiting)
+    Route::get('info', [McpOpenAIController::class, 'info'])
+        ->middleware('throttle:60,1');
 
-    // Tool discovery and execution (with optional auth)
-    Route::get('tools', [McpOpenAIController::class, 'listTools']);
-    Route::post('tools/execute', [McpOpenAIController::class, 'executeTool']);
+    // Protected endpoints - require API token authentication and rate limiting
+    Route::middleware(['mcp.auth', 'throttle:60,1'])->group(function () {
+        // Tool discovery and execution
+        Route::get('tools', [McpOpenAIController::class, 'listTools']);
+        Route::post('tools/execute', [McpOpenAIController::class, 'executeTool']);
 
-    // OpenAI-compatible chat completions with automatic MCP tools injection
-    Route::post('chat/completions', [McpOpenAIController::class, 'chatCompletions']);
+        // OpenAI-compatible chat completions with automatic MCP tools injection
+        Route::post('chat/completions', [McpOpenAIController::class, 'chatCompletions']);
 
-    // Webhook endpoint for OpenAI function calling callbacks
-    Route::post('webhook', [McpOpenAIController::class, 'webhook']);
+        // Webhook endpoint for OpenAI function calling callbacks
+        Route::post('webhook', [McpOpenAIController::class, 'webhook']);
+    });
 });

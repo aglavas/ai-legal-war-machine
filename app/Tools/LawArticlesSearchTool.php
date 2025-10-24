@@ -2,6 +2,7 @@
 
 namespace App\Tools;
 
+use App\Mcp\ToolSchemas;
 use App\Services\Mcp\InternalMcpClient;
 use Vizra\VizraADK\Tools\BaseTool;
 
@@ -11,7 +12,7 @@ use Vizra\VizraADK\Tools\BaseTool;
 class LawArticlesSearchTool extends BaseTool
 {
     protected string $name = 'law_articles_search';
-    protected string $description = 'Pretraži zakone i članke zakona. Parametri: query, law_number, title, limit';
+    protected string $description;
 
     protected InternalMcpClient $client;
 
@@ -19,33 +20,17 @@ class LawArticlesSearchTool extends BaseTool
     {
         parent::__construct();
         $this->client = app(InternalMcpClient::class);
+
+        // Get description from centralized schema
+        $schema = ToolSchemas::get('law-articles-search');
+        $this->description = $schema['description'] ?? 'Law Articles Search Tool';
     }
 
     public function getInputSchema(): array
     {
-        return [
-            'type' => 'object',
-            'properties' => [
-                'query' => [
-                    'type' => 'string',
-                    'description' => 'Opcionalni text za pretragu kroz zakone',
-                ],
-                'law_number' => [
-                    'type' => 'string',
-                    'description' => 'Broj zakona (npr. "NN 123/20")',
-                ],
-                'title' => [
-                    'type' => 'string',
-                    'description' => 'Naslov zakona',
-                ],
-                'limit' => [
-                    'type' => 'integer',
-                    'description' => 'Broj rezultata (1-100, default: 10)',
-                    'minimum' => 1,
-                    'maximum' => 100,
-                ],
-            ],
-        ];
+        // Use centralized schema definition
+        $schema = ToolSchemas::get('law-articles-search');
+        return $schema['inputSchema'] ?? ['type' => 'object'];
     }
 
     public function execute(array $arguments): string

@@ -2,6 +2,7 @@
 
 namespace App\Tools;
 
+use App\Mcp\ToolSchemas;
 use App\Services\Mcp\InternalMcpClient;
 use Vizra\VizraADK\Tools\BaseTool;
 
@@ -11,7 +12,7 @@ use Vizra\VizraADK\Tools\BaseTool;
 class OdlukeMetaTool extends BaseTool
 {
     protected string $name = 'odluke_meta';
-    protected string $description = 'Dohvati metapodatke za jedan ili više ID-eva odluka (Document/View?id=...)';
+    protected string $description;
 
     protected InternalMcpClient $client;
 
@@ -19,28 +20,17 @@ class OdlukeMetaTool extends BaseTool
     {
         parent::__construct();
         $this->client = app(InternalMcpClient::class);
+
+        // Get description from centralized schema
+        $schema = ToolSchemas::get('odluke-meta');
+        $this->description = $schema['description'] ?? 'Odluke Meta Tool';
     }
 
     public function getInputSchema(): array
     {
-        return [
-            'type' => 'object',
-            'properties' => [
-                'id' => [
-                    'type' => 'string',
-                    'description' => 'Single decision ID (GUID)',
-                ],
-                'ids' => [
-                    'type' => 'array',
-                    'items' => ['type' => 'string'],
-                    'description' => 'Array of decision IDs',
-                ],
-                'base_url' => [
-                    'type' => 'string',
-                    'description' => 'Custom base URL (optional)',
-                ],
-            ],
-        ];
+        // Use centralized schema definition
+        $schema = ToolSchemas::get('odluke-meta');
+        return $schema['inputSchema'] ?? ['type' => 'object'];
     }
 
     public function execute(array $arguments): string

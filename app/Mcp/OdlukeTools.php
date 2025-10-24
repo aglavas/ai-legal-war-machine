@@ -78,7 +78,16 @@ class OdlukeTools
         $client = OdlukeClient::fromConfig()->withBaseUrl($base_url);
 
         $outDir = config('odluke.out_dir') ?: storage_path('app/odluke');
-        @is_dir($outDir) || @mkdir($outDir, 0775, true);
+
+        // Ensure output directory exists with proper error handling
+        if (!is_dir($outDir)) {
+            if (!mkdir($outDir, 0775, true) && !is_dir($outDir)) {
+                return [
+                    'content' => [[ 'type' => 'text', 'text' => "Failed to create output directory: {$outDir}" ]],
+                    'isError' => true,
+                ];
+            }
+        }
 
         $meta = $client->fetchDecisionMeta($id) ?? [];
         $basename = $client->buildBaseFileName($meta, $id);
@@ -97,8 +106,12 @@ class OdlukeTools
             if ($pdf['ok'] ?? false) {
                 if ($save) {
                     $path = $outDir . '/' . $basename . '.pdf';
-                    file_put_contents($path, $pdf['bytes']);
-                    $result['saved']['pdf'] = $path;
+                    $bytesWritten = @file_put_contents($path, $pdf['bytes']);
+                    if ($bytesWritten === false) {
+                        $result['errors']['pdf'] = "Failed to write file: {$path}";
+                    } else {
+                        $result['saved']['pdf'] = $path;
+                    }
                 } else {
                     $result['pdf'] = [
                         'content_type' => $pdf['content_type'],
@@ -115,8 +128,12 @@ class OdlukeTools
             if ($html['ok'] ?? false) {
                 if ($save) {
                     $path = $outDir . '/' . $basename . '.html';
-                    file_put_contents($path, $html['bytes']);
-                    $result['saved']['html'] = $path;
+                    $bytesWritten = @file_put_contents($path, $html['bytes']);
+                    if ($bytesWritten === false) {
+                        $result['errors']['html'] = "Failed to write file: {$path}";
+                    } else {
+                        $result['saved']['html'] = $path;
+                    }
                 } else {
                     $result['html'] = [
                         'content_type' => $html['content_type'],
@@ -164,17 +181,23 @@ class OdlukeTools
             $ingestedQuery->where('title', 'like', '%' . trim($title) . '%');
         }
 
-        $ingestedLaws = $ingestedQuery->limit($limit)->get();
+        // Fix N+1 query issue: Eager load laws relationship with limit
+        $ingestedLaws = $ingestedQuery
+            ->with([
+                'laws' => function ($query) {
+                    $query->orderBy('chunk_index')
+                        ->limit(50)
+                        ->select(['id', 'ingested_law_id', 'chunk_index', 'content', 'chapter', 'section', 'metadata']);
+                }
+            ])
+            ->limit($limit)
+            ->get();
 
         $results = [];
 
         foreach ($ingestedLaws as $ingestedLaw) {
-            // Get law articles (chunks) for this ingested law
-            $articles = Law::query()
-                ->where('ingested_law_id', $ingestedLaw->id)
-                ->orderBy('chunk_index')
-                ->limit(50) // Limit articles per law
-                ->get(['id', 'chunk_index', 'content', 'chapter', 'section', 'metadata'])
+            // Access eager-loaded laws instead of making separate query
+            $articles = $ingestedLaw->laws
                 ->map(function ($law) {
                     return [
                         'id' => $law->id,

@@ -2,6 +2,7 @@
 
 namespace App\Tools;
 
+use App\Mcp\ToolSchemas;
 use App\Services\Mcp\InternalMcpClient;
 use Vizra\VizraADK\Tools\BaseTool;
 
@@ -11,7 +12,7 @@ use Vizra\VizraADK\Tools\BaseTool;
 class OdlukeDownloadTool extends BaseTool
 {
     protected string $name = 'odluke_download';
-    protected string $description = 'Preuzmi odluku (PDF/HTML). Parametri: id (GUID), format {pdf|html|both}, save, base_url';
+    protected string $description;
 
     protected InternalMcpClient $client;
 
@@ -19,33 +20,17 @@ class OdlukeDownloadTool extends BaseTool
     {
         parent::__construct();
         $this->client = app(InternalMcpClient::class);
+
+        // Get description from centralized schema
+        $schema = ToolSchemas::get('odluke-download');
+        $this->description = $schema['description'] ?? 'Odluke Download Tool';
     }
 
     public function getInputSchema(): array
     {
-        return [
-            'type' => 'object',
-            'properties' => [
-                'id' => [
-                    'type' => 'string',
-                    'description' => 'Decision ID (GUID)',
-                ],
-                'format' => [
-                    'type' => 'string',
-                    'enum' => ['pdf', 'html', 'both'],
-                    'description' => 'Format preuzimanja (default: pdf)',
-                ],
-                'save' => [
-                    'type' => 'boolean',
-                    'description' => 'Snimi lokalno u storage/app/odluke (default: false)',
-                ],
-                'base_url' => [
-                    'type' => 'string',
-                    'description' => 'Custom base URL (optional)',
-                ],
-            ],
-            'required' => ['id'],
-        ];
+        // Use centralized schema definition
+        $schema = ToolSchemas::get('odluke-download');
+        return $schema['inputSchema'] ?? ['type' => 'object'];
     }
 
     public function execute(array $arguments): string

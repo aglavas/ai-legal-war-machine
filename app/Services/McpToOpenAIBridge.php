@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Mcp\OdlukeTools;
+use App\Mcp\ToolSchemas;
 use Illuminate\Support\Facades\Log;
 use PhpMcp\Server\Server as McpServer;
 use ReflectionClass;
@@ -23,136 +24,11 @@ class McpToOpenAIBridge
 
     /**
      * Get all available tools in OpenAI function format
+     * Uses centralized ToolSchemas for single source of truth
      */
     public function getOpenAIFunctions(): array
     {
-        return [
-            [
-                'type' => 'function',
-                'function' => [
-                    'name' => 'odluke_search',
-                    'description' => 'Search Odluke (judicial decisions) from odluke.sudovi.hr and return decision IDs with optional filters (q, params, page, limit)',
-                    'parameters' => [
-                        'type' => 'object',
-                        'properties' => [
-                            'q' => [
-                                'type' => 'string',
-                                'description' => 'Free text search query (e.g., "ugovor o radu")',
-                            ],
-                            'params' => [
-                                'type' => 'string',
-                                'description' => 'Additional query string for filters (e.g., "sort=dat&vo=Presuda")',
-                            ],
-                            'limit' => [
-                                'type' => 'integer',
-                                'description' => 'Maximum number of IDs to return from one page (1-500, default 100)',
-                                'minimum' => 1,
-                                'maximum' => 500,
-                            ],
-                            'page' => [
-                                'type' => 'integer',
-                                'description' => 'Page number of results (default 1)',
-                                'minimum' => 1,
-                            ],
-                        ],
-                    ],
-                ],
-            ],
-            [
-                'type' => 'function',
-                'function' => [
-                    'name' => 'odluke_meta',
-                    'description' => 'Fetch metadata for one or more decision IDs from odluke.sudovi.hr',
-                    'parameters' => [
-                        'type' => 'object',
-                        'properties' => [
-                            'id' => [
-                                'type' => 'string',
-                                'description' => 'Single decision ID (GUID)',
-                            ],
-                            'ids' => [
-                                'type' => 'array',
-                                'items' => ['type' => 'string'],
-                                'description' => 'Array of decision IDs',
-                            ],
-                        ],
-                    ],
-                ],
-            ],
-            [
-                'type' => 'function',
-                'function' => [
-                    'name' => 'odluke_download',
-                    'description' => 'Download decision PDF/HTML from odluke.sudovi.hr. Can save locally or return info about the download.',
-                    'parameters' => [
-                        'type' => 'object',
-                        'properties' => [
-                            'id' => [
-                                'type' => 'string',
-                                'description' => 'Decision ID (GUID)',
-                            ],
-                            'format' => [
-                                'type' => 'string',
-                                'enum' => ['pdf', 'html', 'both'],
-                                'description' => 'Format to download (pdf, html, or both)',
-                            ],
-                            'save' => [
-                                'type' => 'boolean',
-                                'description' => 'Whether to save files locally (storage/app/odluke)',
-                            ],
-                        ],
-                        'required' => ['id'],
-                    ],
-                ],
-            ],
-            [
-                'type' => 'function',
-                'function' => [
-                    'name' => 'law_articles_search',
-                    'description' => 'Search ingested Croatian laws and law articles by query text, law number, or title. Returns laws with their articles/chunks.',
-                    'parameters' => [
-                        'type' => 'object',
-                        'properties' => [
-                            'query' => [
-                                'type' => 'string',
-                                'description' => 'Optional free text search across doc_id, title, law_number, jurisdiction, keywords',
-                            ],
-                            'law_number' => [
-                                'type' => 'string',
-                                'description' => 'Filter by specific law number (e.g., "NN 123/20")',
-                            ],
-                            'title' => [
-                                'type' => 'string',
-                                'description' => 'Filter by law title',
-                            ],
-                            'limit' => [
-                                'type' => 'integer',
-                                'description' => 'Number of laws to return (1-100, default 10)',
-                                'minimum' => 1,
-                                'maximum' => 100,
-                            ],
-                        ],
-                    ],
-                ],
-            ],
-            [
-                'type' => 'function',
-                'function' => [
-                    'name' => 'law_article_by_id',
-                    'description' => 'Get a single law article/chunk by its ID with full details including content, metadata, and parent law information',
-                    'parameters' => [
-                        'type' => 'object',
-                        'properties' => [
-                            'id' => [
-                                'type' => 'string',
-                                'description' => 'Law article ID (ULID)',
-                            ],
-                        ],
-                        'required' => ['id'],
-                    ],
-                ],
-            ],
-        ];
+        return ToolSchemas::allOpenAIFunctions();
     }
 
     /**

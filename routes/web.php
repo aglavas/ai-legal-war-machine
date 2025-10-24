@@ -32,6 +32,13 @@ Route::get('/eoglasna', \App\Http\Livewire\EoglasnaMonitoring::class)->name('eog
 
 // MCP HTTP Endpoint - for Vizra ADK agents (OdlukeAgent) and external MCP clients
 Route::prefix('mcp')->group(function () {
-    Route::post('/message', [McpHttpController::class, 'message'])->name('mcp.message');
-    Route::get('/info', [McpHttpController::class, 'info'])->name('mcp.info');
+    // Info endpoint is public with rate limiting
+    Route::get('/info', [McpHttpController::class, 'info'])
+        ->middleware('throttle:60,1')
+        ->name('mcp.info');
+
+    // Message endpoint requires authentication and rate limiting
+    Route::post('/message', [McpHttpController::class, 'message'])
+        ->middleware(['mcp.auth', 'throttle:60,1'])
+        ->name('mcp.message');
 });

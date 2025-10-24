@@ -2,6 +2,7 @@
 
 namespace App\Tools;
 
+use App\Mcp\ToolSchemas;
 use App\Services\Mcp\InternalMcpClient;
 use Vizra\VizraADK\Tools\BaseTool;
 
@@ -14,7 +15,7 @@ use Vizra\VizraADK\Tools\BaseTool;
 class OdlukeSearchTool extends BaseTool
 {
     protected string $name = 'odluke_search';
-    protected string $description = 'Pretraži odluke i vrati ID-eve s /Document/DisplayList. Parametri: q, params, page, limit, base_url';
+    protected string $description;
 
     protected InternalMcpClient $client;
 
@@ -22,38 +23,17 @@ class OdlukeSearchTool extends BaseTool
     {
         parent::__construct();
         $this->client = app(InternalMcpClient::class);
+
+        // Get description from centralized schema
+        $schema = ToolSchemas::get('odluke-search');
+        $this->description = $schema['description'] ?? 'Odluke Search Tool';
     }
 
     public function getInputSchema(): array
     {
-        return [
-            'type' => 'object',
-            'properties' => [
-                'q' => [
-                    'type' => 'string',
-                    'description' => 'Slobodni upit za pretragu (npr. "ugovor o radu")',
-                ],
-                'params' => [
-                    'type' => 'string',
-                    'description' => 'Dodatni query string za /Document/DisplayList, npr. "sort=dat&vo=Presuda"',
-                ],
-                'limit' => [
-                    'type' => 'integer',
-                    'description' => 'Maksimalan broj ID-eva (1-500, default 100)',
-                    'minimum' => 1,
-                    'maximum' => 500,
-                ],
-                'page' => [
-                    'type' => 'integer',
-                    'description' => 'Broj stranice rezultata (default 1)',
-                    'minimum' => 1,
-                ],
-                'base_url' => [
-                    'type' => 'string',
-                    'description' => 'Custom base URL (optional)',
-                ],
-            ],
-        ];
+        // Use centralized schema definition
+        $schema = ToolSchemas::get('odluke-search');
+        return $schema['inputSchema'] ?? ['type' => 'object'];
     }
 
     public function execute(array $arguments): string
