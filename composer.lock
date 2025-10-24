@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "6a2a12b93ecfe6aa588c4df82986d187",
+    "content-hash": "f93e72e84389c937fba6d5dd24249ad5",
     "packages": [
         {
             "name": "aws/aws-crt-php",
@@ -8818,16 +8818,16 @@
         },
         {
             "name": "vizra/vizra-adk",
-            "version": "0.0.34",
+            "version": "0.0.37",
             "source": {
                 "type": "git",
                 "url": "https://github.com/vizra-ai/vizra-adk.git",
-                "reference": "c56c551079008e34c63ed3853938a8dc0b258f7e"
+                "reference": "85df3a9b481c044aaf715b3a149b9cb8789bed28"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/vizra-ai/vizra-adk/zipball/c56c551079008e34c63ed3853938a8dc0b258f7e",
-                "reference": "c56c551079008e34c63ed3853938a8dc0b258f7e",
+                "url": "https://api.github.com/repos/vizra-ai/vizra-adk/zipball/85df3a9b481c044aaf715b3a149b9cb8789bed28",
+                "reference": "85df3a9b481c044aaf715b3a149b9cb8789bed28",
                 "shasum": ""
             },
             "require": {
@@ -8900,7 +8900,7 @@
             ],
             "support": {
                 "issues": "https://github.com/vizra-ai/vizra-adk/issues",
-                "source": "https://github.com/vizra-ai/vizra-adk/tree/v0.0.34"
+                "source": "https://github.com/vizra-ai/vizra-adk/tree/v0.0.37"
             },
             "funding": [
                 {
@@ -8908,7 +8908,7 @@
                     "type": "github"
                 }
             ],
-            "time": "2025-10-03T08:12:37+00:00"
+            "time": "2025-10-15T13:32:54+00:00"
         },
         {
             "name": "vlucas/phpdotenv",
@@ -11697,7 +11697,8 @@
     "prefer-lowest": false,
     "platform": {
         "php": "^8.2",
-        "ext-exif": "*"
+        "ext-exif": "*",
+        "ext-mbstring": "*"
     },
     "platform-dev": {},
     "plugin-api-version": "2.6.0"

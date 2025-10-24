@@ -33,7 +33,7 @@ return [
             'agents' => env('VIZRA_ADK_LOG_AGENTS', true),
             'tools' => env('VIZRA_ADK_LOG_TOOLS', true),
             'mcp' => env('VIZRA_ADK_LOG_MCP', true),
-            'traces' => env('VIZRA_ADK_LOG_TRACES', false),
+            'traces' => env('VIZRA_ADK_LOG_TRACES', true),
         ],
     ],
 
