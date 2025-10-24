@@ -147,7 +147,7 @@ class IngestedLawsManager extends Component
             'aliases' => [],
             'keywords' => [],
             'keywords_text' => '',
-            'metadata' => [],
+            'metadata' => '{}',
         ];
         $this->showIngestedModal = true;
     }
@@ -167,6 +167,8 @@ class IngestedLawsManager extends Component
         }
         if (isset($this->editingIngested['metadata']) && is_array($this->editingIngested['metadata'])) {
             $this->editingIngested['metadata'] = json_encode($this->editingIngested['metadata'], JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+        } else {
+          $this->editingIngested['metadata'] = '{}';
         }
 
         $this->showIngestedModal = true;
@@ -243,7 +245,7 @@ class IngestedLawsManager extends Component
             'source_url' => $parent->source_url,
             'chunk_index' => 0,
             'content' => '',
-            'metadata' => [],
+            'metadata' => '{}',
         ];
         $this->showLawModal = true;
     }
@@ -260,6 +262,8 @@ class IngestedLawsManager extends Component
         }
         if (isset($this->editingLaw['metadata']) && is_array($this->editingLaw['metadata'])) {
             $this->editingLaw['metadata'] = json_encode($this->editingLaw['metadata'], JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+        } else {
+          $this->editingLaw['metadata'] = '{}';
         }
 
         $this->showLawModal = true;
