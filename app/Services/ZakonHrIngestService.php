@@ -148,6 +148,10 @@ class ZakonHrIngestService
                     } catch (\Throwable $e) {
                         Log::warning('Failed merging full law PDF', ['url' => $url, 'err' => $e->getMessage()]);
                     }
+
+                    // Free memory after PDF operations before proceeding to embeddings
+                    unset($articlePdfAbs);
+                    gc_collect_cycles();
                 }
 
                 if (!empty($docs) && !$dry) {
@@ -289,6 +293,10 @@ class ZakonHrIngestService
             } catch (\Throwable $e) {
                 Log::warning('Failed merging full law PDF (offline)', ['err' => $e->getMessage()]);
             }
+
+            // Free memory after PDF operations before proceeding to embeddings
+            unset($articlePdfAbs);
+            gc_collect_cycles();
         }
 
         if (!empty($docs) && !$dry) {

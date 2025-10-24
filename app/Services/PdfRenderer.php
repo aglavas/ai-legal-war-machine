@@ -17,5 +17,8 @@ class PdfRenderer
 
         @mkdir(dirname($destPath), 0775, true);
         $pdf->save($destPath);
+
+        // Free memory after rendering each article
+        unset($pdf, $html);
     }
 }
