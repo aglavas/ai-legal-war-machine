@@ -145,7 +145,7 @@ class IngestedLawsManager extends Component
             'aliases' => [],
             'keywords' => [],
             'keywords_text' => '',
-            'metadata' => [],
+            'metadata' => '{}',
         ];
         $this->showIngestedModal = true;
     }
@@ -155,11 +155,40 @@ class IngestedLawsManager extends Component
         $this->resetValidation();
         $model = IngestedLaw::findOrFail($id);
         $this->editingIngested = $model->toArray();
+
+        // Convert metadata array to JSON string for textarea display
+        if (isset($this->editingIngested['metadata']) && is_array($this->editingIngested['metadata'])) {
+            $this->editingIngested['metadata'] = json_encode(
+                $this->editingIngested['metadata'],
+                JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES
+            );
+        } else {
+            $this->editingIngested['metadata'] = '{}';
+        }
+
         $this->showIngestedModal = true;
     }
 
     public function saveIngested(): void
     {
+        // Validate and parse JSON metadata
+        if (isset($this->editingIngested['metadata']) && is_string($this->editingIngested['metadata'])) {
+            $metadataString = trim($this->editingIngested['metadata']);
+
+            if (empty($metadataString)) {
+                $this->editingIngested['metadata'] = [];
+            } else {
+                $decoded = json_decode($metadataString, true);
+
+                if (json_last_error() !== JSON_ERROR_NONE) {
+                    $this->addError('editingIngested.metadata', 'Invalid JSON format: ' . json_last_error_msg());
+                    return;
+                }
+
+                $this->editingIngested['metadata'] = $decoded;
+            }
+        }
+
         $this->validate($this->ingestedRules());
 
         if (empty($this->editingIngested['id'])) {
@@ -215,7 +244,7 @@ class IngestedLawsManager extends Component
             'source_url' => $parent->source_url,
             'chunk_index' => 0,
             'content' => '',
-            'metadata' => [],
+            'metadata' => '{}',
         ];
         $this->showLawModal = true;
     }
@@ -225,12 +254,41 @@ class IngestedLawsManager extends Component
         $this->resetValidation();
         $model = Law::findOrFail($id);
         $this->editingLaw = $model->toArray();
+
+        // Convert metadata array to JSON string for textarea display
+        if (isset($this->editingLaw['metadata']) && is_array($this->editingLaw['metadata'])) {
+            $this->editingLaw['metadata'] = json_encode(
+                $this->editingLaw['metadata'],
+                JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES
+            );
+        } else {
+            $this->editingLaw['metadata'] = '{}';
+        }
+
         $this->showLawModal = true;
     }
 
     public function saveLaw(): void
     {
         if (!$this->selectedIngestedId) return;
+
+        // Validate and parse JSON metadata
+        if (isset($this->editingLaw['metadata']) && is_string($this->editingLaw['metadata'])) {
+            $metadataString = trim($this->editingLaw['metadata']);
+
+            if (empty($metadataString)) {
+                $this->editingLaw['metadata'] = [];
+            } else {
+                $decoded = json_decode($metadataString, true);
+
+                if (json_last_error() !== JSON_ERROR_NONE) {
+                    $this->addError('editingLaw.metadata', 'Invalid JSON format: ' . json_last_error_msg());
+                    return;
+                }
+
+                $this->editingLaw['metadata'] = $decoded;
+            }
+        }
 
         $this->validate($this->lawRules());
 

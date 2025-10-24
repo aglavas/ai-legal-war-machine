@@ -302,6 +302,7 @@
                     <div class="form-group span-2">
                         <label>Metadata (JSON)</label>
                         <textarea wire:model.defer="editingIngested.metadata" rows="3" placeholder='{"key": "value"}'></textarea>
+                        @error('editingIngested.metadata') <div class="error-text">{{ $message }}</div> @enderror
                     </div>
                 </div>
                 <div class="form-actions">
@@ -351,6 +352,7 @@
                     <div class="form-group span-2">
                         <label>Metadata (JSON)</label>
                         <textarea wire:model.defer="editingLaw.metadata" rows="3" placeholder='{"key": "value"}'></textarea>
+                        @error('editingLaw.metadata') <div class="error-text">{{ $message }}</div> @enderror
                     </div>
                 </div>
                 <div class="form-actions">
