@@ -89,11 +89,11 @@ class ZakonHrIngestService
 
                 $docs = [];
                 $articlePdfAbs = [];
-                foreach ($articles as $idx => $art) {
+                foreach ($articles as $idxx => $art) {
                     $plain = $this->htmlToText($art['html'] ?? '');
                     if ($plain === '') continue;
 
-                    $articleNumber = (string)($art['number'] ?? ($idx+1));
+                    $articleNumber = (string)($art['number'] ?? ($idxx+1));
                     $docIdNew = $docId . '-clanak-'.$articleNumber;
 
                     // Render per-article PDF
@@ -121,10 +121,8 @@ class ZakonHrIngestService
                         'content' => $plain,
                         'metadata' => array_merge($enhancedMetadata, [
                             'heading_chain' => $art['heading_chain'] ?? [],
-
                             'file_name' => $pdfFileName,
-                        ],
-                        'chunk_index' => $idx,
+                            'chunk_index' => $idxx,
                         ]),
                         'law_meta' => [
                             'title' => $titleSnake,
@@ -241,9 +239,8 @@ class ZakonHrIngestService
             $plain = $this->htmlToText($art['html'] ?? '');
             if ($plain === '') continue;
             $articleNumber = (string)($art['number'] ?? ($idx+1));
-
+            $pdfFileName = $titleSnake.' - clanak-'.$articleNumber.'.pdf';
             if (!$dry) {
-                $pdfFileName = $titleSnake.' - clanak-'.$articleNumber.'.pdf';
                 $pdfRel = $baseDir.'/'.$pdfFileName;
                 $this->renderer->renderArticle([
                     'law_title' => $titleSnake,
@@ -267,8 +264,7 @@ class ZakonHrIngestService
                 'metadata' => array_merge($enhancedMetadata, [
                     'heading_chain' => $art['heading_chain'] ?? [],
                     'file_name' => $pdfFileName,
-                ],
-                'chunk_index' => $idx,
+                    'chunk_index' => $idx
                 ]),
                 'law_meta' => [
                     'title' => $titleSnake,
@@ -441,13 +437,14 @@ class ZakonHrIngestService
      */
     protected function generateEnhancedMetadata(string $title, ?string $sourceUrl, array $baseMeta = []): array
     {
+        $datePublished = $baseMeta['date_published'] ?? null;
         try {
             $prompt = <<<PROMPT
 Extract metadata from this Croatian law title and information:
 
 Title: {$title}
 Source URL: {$sourceUrl}
-Published Date: {$baseMeta['date_published'] ?? 'unknown'}
+Published Date: {$datePublished}
 
 Generate a JSON response with:
 1. "aliases": Array of alternative names/abbreviations (e.g., full name, common abbreviations, Croatian and English names)
@@ -597,12 +594,13 @@ PROMPT;
                 'confidence' => 0.5,
             ];
         }
+    }
 
-     * Dispatch metadata generation job with environment-aware queue selection.
-     * Uses sync queue for development, async (database) for production.
-     *
-     * This is the CORRECT approach: Call OpenAI ONCE per law, not per article!
-     */
+    /* Dispatch metadata generation job with environment-aware queue selection.
+    * Uses sync queue for development, async (database) for production.
+    *
+    * This is the CORRECT approach: Call OpenAI ONCE per law, not per article!
+    */
     protected function dispatchMetadataGeneration(string $ingestedLawId, array $docs): void
     {
         // Extract article data needed for metadata generation
