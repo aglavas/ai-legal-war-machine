@@ -234,6 +234,27 @@
                     <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 24 24" fill="currentColor"><path d="M14 3h7v7h-2V6.414l-9.293 9.293-1.414-1.414L17.586 5H14V3Z"/></svg>
                 </div>
             </a>
+
+            <!-- AI Chatbot -->
+            <a href="/chatbot" data-title="chatbot ai assistant legal research court decisions chat"
+               class="card group block rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition">
+                <div class="flex items-start justify-between">
+                    <div class="flex items-center gap-3">
+                        <div class="rounded-xl bg-purple-100 p-2 text-purple-600">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12c0 5.52 4.48 10 10 10s10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/></svg>
+                        </div>
+                        <div>
+                            <h3 class="text-lg font-semibold">AI Legal Assistant</h3>
+                            <p class="text-sm text-slate-600">Chat with AI for legal research and case analysis.</p>
+                        </div>
+                    </div>
+                    <span class="badge">AI</span>
+                </div>
+                <div class="mt-4 flex items-center gap-2 text-purple-600 group-hover:gap-3 transition-all">
+                    <span>Open</span>
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 24 24" fill="currentColor"><path d="M14 3h7v7h-2V6.414l-9.293 9.293-1.414-1.414L17.586 5H14V3Z"/></svg>
+                </div>
+            </a>
         </div>
     </section>
 
