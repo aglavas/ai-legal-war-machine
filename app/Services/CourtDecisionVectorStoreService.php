@@ -64,7 +64,7 @@ class CourtDecisionVectorStoreService
                     'doc_id' => $docId,
                     'upload_id' => $uploadId,
                     'content' => $content,
-                    'metadata' => isset($doc['metadata']) ? json_encode($doc['metadata']) : null,
+                    'metadata' => isset($doc['metadata']) ? json_encode($doc['metadata'], JSON_UNESCAPED_UNICODE) : null,
                     'source' => $doc['source'] ?? null,
                     'source_id' => $doc['source_id'] ?? null,
                     'chunk_index' => (int)($doc['chunk_index'] ?? 0),

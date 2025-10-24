@@ -64,7 +64,7 @@ class MigrateCasesToCourtDecisionsTest extends TestCase
             'tags' => ['chunked'],
             'chunk_index' => 0,
             'content' => 'Sample content for embedding.',
-            'metadata' => json_encode(['page' => 1]),
+            'metadata' => json_encode(['page' => 1], JSON_UNESCAPED_UNICODE),
             'source' => 'textract',
             'source_id' => 'abc123',
             'embedding_provider' => 'openai',

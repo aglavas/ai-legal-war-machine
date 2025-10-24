@@ -26,7 +26,7 @@ class UploadService
             'received' => [],
             'completed' => false,
         ];
-        Storage::put($this->manifestPath($uploadId), json_encode($manifest));
+        Storage::put($this->manifestPath($uploadId), json_encode($manifest, JSON_UNESCAPED_UNICODE));
         Storage::makeDirectory($this->chunkDir($uploadId));
         return $manifest;
     }
@@ -42,7 +42,7 @@ class UploadService
         $chunk->storeAs($this->chunkDir($uploadId), basename($path));
 
         $manifest['received'] = array_values(array_unique(array_merge($manifest['received'], [$index])));
-        Storage::put($this->manifestPath($uploadId), json_encode($manifest));
+        Storage::put($this->manifestPath($uploadId), json_encode($manifest, JSON_UNESCAPED_UNICODE));
         return [
             'id' => $uploadId,
             'index' => $index,
@@ -102,7 +102,7 @@ class UploadService
         $manifest['path'] = $finalRel;
         $manifest['disk'] = $this->finalDisk;
         $manifest['url'] = Storage::disk($this->finalDisk)->url($finalRel);
-        Storage::put($this->manifestPath($uploadId), json_encode($manifest));
+        Storage::put($this->manifestPath($uploadId), json_encode($manifest, JSON_UNESCAPED_UNICODE));
 
         return [
             'status' => 'completed',
