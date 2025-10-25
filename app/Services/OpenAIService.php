@@ -775,4 +775,279 @@ class OpenAIService
         }
         return $parts;
     }
+
+    // ========== RAG & Grounded Response Methods ==========
+
+    /**
+     * Create embedding for a single text input
+     *
+     * @param string $text Text to embed
+     * @param string|null $model Embedding model to use
+     * @return array Embedding vector
+     * @throws Throwable
+     */
+    public function createEmbedding(string $text, ?string $model = null): array
+    {
+        $result = $this->embeddings($text, $model);
+        return $result['data'][0]['embedding'] ?? [];
+    }
+
+    /**
+     * Build a grounded prompt with retrieved context
+     *
+     * @param string $query User's query
+     * @param array $retrievedChunks Chunks from RAG retrieval
+     * @param array $options Additional options
+     * @return string Grounded prompt with citations
+     */
+    public function buildGroundedPrompt(string $query, array $retrievedChunks, array $options = []): string
+    {
+        $minConfidence = $options['min_confidence'] ?? 0.5;
+        $maxChunks = $options['max_chunks'] ?? 10;
+        $maxTokens = $options['max_tokens'] ?? 4000;
+
+        // Filter by confidence
+        $chunks = array_filter($retrievedChunks, fn($c) => ($c['confidence'] ?? 0) >= $minConfidence);
+
+        // Limit number of chunks
+        $chunks = array_slice($chunks, 0, $maxChunks);
+
+        // Build context from chunks
+        $contextParts = [];
+        $currentTokens = 0;
+
+        foreach ($chunks as $idx => $chunk) {
+            $chunkNum = $idx + 1;
+            $source = $this->formatSource($chunk);
+            $content = $chunk['content'] ?? '';
+
+            // Estimate tokens (rough: 1 token ≈ 4 characters)
+            $chunkTokens = strlen($content) / 4;
+
+            if ($currentTokens + $chunkTokens > $maxTokens) {
+                break; // Stop if we exceed token budget
+            }
+
+            $contextParts[] = "**[{$chunkNum}] {$source}**\n{$content}";
+            $currentTokens += $chunkTokens;
+        }
+
+        $context = implode("\n\n---\n\n", $contextParts);
+
+        // Build the grounded prompt
+        $prompt = <<<PROMPT
+Odgovorite na sljedeće pitanje koristeći SAMO informacije iz priloženih pravnih izvora.
+
+# PRAVILA ZA ODGOVARANJE
+
+1. **Temeljite se isključivo na priloženim izvorima** - ne koristite opće znanje
+2. **Citirajte izvore** - svaku tvrdnju potkrijepite brojem izvora u uglatim zagradama [1], [2], itd.
+3. **Budite precizni** - navedite točne članke zakona, stavke i točke gdje je primjenjivo
+4. **Priznajte ograničenja** - ako priloženi izvori ne sadrže dovoljan odgovor, jasno to naznačite
+5. **Strukturirajte odgovor** - koristite jasne odlomke i nabrajanja gdje je primjereno
+
+# PRILOŽENI PRAVNI IZVORI
+
+{$context}
+
+# PITANJE KORISNIKA
+
+{$query}
+
+# VAŠ ODGOVOR
+
+Odgovorite na hrvatskom jeziku, s jasnim citiranjem izvora.
+PROMPT;
+
+        return $prompt;
+    }
+
+    /**
+     * Build a low-confidence refusal message
+     *
+     * @param string $query Original query
+     * @param float $confidence Confidence score
+     * @param array $options Additional options
+     * @return string Refusal message
+     */
+    public function buildRefusalMessage(string $query, float $confidence, array $options = []): string
+    {
+        $threshold = $options['min_confidence'] ?? 0.5;
+
+        return <<<REFUSAL
+Žao mi je, ali ne mogu pružiti pouzdan odgovor na vaše pitanje s dovoljnom razinom pouzdanosti.
+
+**Razlog:** Trenutno dostupni pravni izvori ne sadrže dovoljno relevantnih informacija za odgovor na:
+"{$query}"
+
+**Pouzdanost pronađenih izvora:** {$confidence}% (potrebno: {$threshold}%)
+
+**Što možete učiniti:**
+
+1. **Preciznije formulirajte pitanje** - možda uključite:
+   - Točan broj predmeta ili zakona
+   - Relevantne datume
+   - Specifične pravne institute
+
+2. **Priložite dodatnu dokumentaciju** - ako imate relevantne dokumente
+
+3. **Konsultirajte odvjetnika** - za pravno obvezujuće savjete uvijek se obratite stručnjaku
+
+Mogu li vam pomoći s reformulacijom pitanja ili vam trebaju dodatne informacije?
+REFUSAL;
+    }
+
+    /**
+     * Build clarification prompts when query is ambiguous
+     *
+     * @param string $query Original query
+     * @param array $queryAnalysis Analysis from QueryNormalizer
+     * @return array Array of clarification questions
+     */
+    public function buildClarificationPrompts(string $query, array $queryAnalysis): array
+    {
+        $clarifications = [];
+
+        // Check if case ID is missing
+        if (empty($queryAnalysis['case_id'])) {
+            $clarifications[] = "Molim navedite točan broj predmeta (npr. Pp-1234/2025).";
+        }
+
+        // Check if citations are ambiguous
+        if (empty($queryAnalysis['članci_prioritet'])) {
+            $clarifications[] = "Na koje članke zakona se odnosi vaše pitanje?";
+        }
+
+        // Check for missing jurisdiction context
+        if (empty($queryAnalysis['jurisdikcija']) || $queryAnalysis['jurisdikcija'] === 'HR') {
+            // Default is OK, but we could ask for more specific court level
+        }
+
+        // Check for missing dates
+        if (empty($queryAnalysis['datumi']) || !isset($queryAnalysis['datumi']['od'])) {
+            $clarifications[] = "Koji je relevantni vremenski period za vaše pitanje?";
+        }
+
+        // Add follow-up questions from QueryNormalizer
+        if (!empty($queryAnalysis['pitanja_za_korisnika'])) {
+            $clarifications = array_merge($clarifications, $queryAnalysis['pitanja_za_korisnika']);
+        }
+
+        return array_unique($clarifications);
+    }
+
+    /**
+     * Create a grounded chat completion with automatic confidence checking
+     *
+     * @param string $query User's query
+     * @param array $retrievedChunks RAG retrieved chunks
+     * @param array $options Chat options
+     * @return array Chat response with grounding metadata
+     * @throws Throwable
+     */
+    public function groundedChatCompletion(string $query, array $retrievedChunks, array $options = []): array
+    {
+        $minConfidence = $options['min_confidence'] ?? 0.5;
+
+        // Calculate average confidence from chunks
+        $avgConfidence = 0;
+        if (!empty($retrievedChunks)) {
+            $confidences = array_column($retrievedChunks, 'confidence');
+            $avgConfidence = array_sum($confidences) / count($confidences);
+        }
+
+        // Check if confidence is too low
+        if ($avgConfidence < $minConfidence) {
+            return [
+                'grounded' => false,
+                'confidence' => $avgConfidence,
+                'refusal' => $this->buildRefusalMessage($query, $avgConfidence * 100, $options),
+                'clarifications' => $this->buildClarificationPrompts(
+                    $query,
+                    $options['query_analysis'] ?? []
+                ),
+            ];
+        }
+
+        // Build grounded prompt
+        $groundedPrompt = $this->buildGroundedPrompt($query, $retrievedChunks, $options);
+
+        // Prepare messages
+        $messages = [
+            [
+                'role' => 'system',
+                'content' => 'Vi ste stručni pravni asistent specijaliziran za hrvatsko pravo. Odgovarate samo na temelju priloženih izvora i uvijek citirate reference.',
+            ],
+            [
+                'role' => 'user',
+                'content' => $groundedPrompt,
+            ],
+        ];
+
+        // Call OpenAI
+        $response = $this->chat($messages, $options['model'] ?? null, [
+            'temperature' => $options['temperature'] ?? 0.3, // Lower temperature for factual responses
+            'max_tokens' => $options['max_response_tokens'] ?? 1500,
+        ]);
+
+        // Extract response
+        $answerContent = $response['choices'][0]['message']['content'] ?? '';
+
+        return [
+            'grounded' => true,
+            'confidence' => $avgConfidence,
+            'answer' => $answerContent,
+            'citations' => $this->extractCitations($retrievedChunks),
+            'usage' => $response['usage'] ?? [],
+            'raw_response' => $response,
+        ];
+    }
+
+    /**
+     * Extract formatted citations from chunks
+     */
+    protected function extractCitations(array $chunks): array
+    {
+        $citations = [];
+
+        foreach ($chunks as $idx => $chunk) {
+            $citations[] = [
+                'number' => $idx + 1,
+                'source' => $this->formatSource($chunk),
+                'title' => $chunk['title'] ?? '',
+                'confidence' => $chunk['confidence'] ?? 0,
+                'corpus' => $chunk['corpus'] ?? 'unknown',
+                'doc_id' => $chunk['doc_id'] ?? null,
+            ];
+        }
+
+        return $citations;
+    }
+
+    /**
+     * Format source information for a chunk
+     */
+    protected function formatSource(array $chunk): string
+    {
+        $corpus = $chunk['corpus'] ?? 'unknown';
+        $title = $chunk['title'] ?? 'Bez naslova';
+        $docId = $chunk['doc_id'] ?? '';
+
+        $metadata = $chunk['metadata'] ?? [];
+        $lawNumber = $metadata['law_number'] ?? $chunk['law_number'] ?? null;
+
+        if ($corpus === 'laws' && $lawNumber) {
+            return "Zakon (NN {$lawNumber})";
+        }
+
+        if ($corpus === 'cases_documents') {
+            return "Predmet {$docId}";
+        }
+
+        if ($corpus === 'court_decision_documents') {
+            return "Sudska odluka {$docId}";
+        }
+
+        return $title;
+    }
 }
