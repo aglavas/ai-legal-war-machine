@@ -2,34 +2,33 @@
 
 namespace App\Console\Commands;
 
-use App\Models\CourtDecision;
-use App\Models\CourtDecisionDocumentUpload;
-use App\Models\EoglasnaNotice;
-use App\Services\CourtDecisionVectorStoreService;
 use App\Services\GraphRagService;
-use App\Services\HrLegalCitationsDetector;
+use App\Services\Odluke\OdlukeClient;
+use App\Services\Odluke\OdlukeIngestService;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\Storage;
-use Illuminate\Support\Str;
 
 class IngestCourtDecisionsEmbeddings extends Command
 {
-    protected $signature = 'decisions:ingest
-        {--source=eoglasna : Data source (eoglasna, uploads)}
-        {--limit= : Max decisions to process}
-        {--model= : Embedding model}
-        {--chunk=1200 : Chunk size in chars}
-        {--overlap=150 : Overlap in chars}
-        {--sync-graph : Sync to graph database}';
+    protected $signature = 'court-decisions:ingest
+        {--id=* : One or more decision IDs to ingest}
+        {--query= : Search query to collect decision IDs (e.g., "Ugovor o radu")}
+        {--params= : Raw query params for advanced filtering (e.g., "sud=Vrhovni+sud&vo=Presuda&od=2024-01-01")}
+        {--limit=50 : Max decision IDs to collect when using --query/--params}
+        {--page=1 : Page number for search results}
+        {--prefer=auto : Content source preference: auto|html|pdf}
+        {--model= : Embedding model (default from config)}
+        {--chunk=1500 : Chunk size in characters}
+        {--overlap=200 : Overlap in characters}
+        {--sync-graph : Sync ingested decisions to graph database}
+        {--dry : Dry run - preview without persisting}';
 
-    protected $description = 'Ingest court decisions, extract metadata, chunk, embed and store in vector database';
+    protected $description = 'Ingest court decisions from odluke.sudovi.hr with embeddings and optional graph sync';
 
     public function __construct(
-        protected CourtDecisionVectorStoreService $vectorStore,
-        protected HrLegalCitationsDetector $citationDetector,
+        protected OdlukeIngestService $ingest,
+        protected OdlukeClient $client,
         protected ?GraphRagService $graphRag = null
     ) {
         parent::__construct();
@@ -37,446 +36,216 @@ class IngestCourtDecisionsEmbeddings extends Command
 
     public function handle(): int
     {
-        $source = $this->option('source') ?? 'eoglasna';
-        $limit = $this->option('limit') ? (int) $this->option('limit') : null;
-        $model = $this->option('model') ?: config('openai.models.embeddings');
-        $chunkSize = (int) ($this->option('chunk') ?? 1200);
-        $overlap = (int) ($this->option('overlap') ?? 150);
-        $syncGraph = $this->option('sync-graph');
+        $this->info('Starting court decisions ingestion from odluke.sudovi.hr');
 
-        $this->info("Starting court decisions ingestion from source: {$source}");
+        // Collect decision IDs
+        $ids = $this->collectDecisionIds();
 
-        $stats = match ($source) {
-            'eoglasna' => $this->ingestFromEoglasna($limit, $model, $chunkSize, $overlap, $syncGraph),
-            'uploads' => $this->ingestFromUploads($limit, $model, $chunkSize, $overlap, $syncGraph),
-            default => throw new \InvalidArgumentException("Unknown source: {$source}"),
-        };
+        if (empty($ids)) {
+            $this->error('No decision IDs to process. Provide --id, or use --query/--params to search.');
+            return self::FAILURE;
+        }
 
-        $this->info('Ingestion completed:');
-        $this->line("  Decisions processed: {$stats['decisions_processed']}");
-        $this->line("  Documents inserted: {$stats['documents_inserted']}");
-        $this->line("  Errors: {$stats['errors']}");
-        $this->line("  Model: {$stats['model']}");
+        $this->info(sprintf('Processing %d decision(s)...', count($ids)));
 
-        if ($syncGraph && isset($stats['synced_to_graph'])) {
-            $this->line("  Synced to graph: {$stats['synced_to_graph']}");
+        // Ingest decisions
+        $stats = $this->ingestDecisions($ids);
+
+        // Display results
+        $this->displayResults($stats);
+
+        // Sync to graph if requested
+        if ($this->option('sync-graph') && !$this->option('dry')) {
+            $this->syncToGraph($stats);
         }
 
         return self::SUCCESS;
     }
 
-    protected function ingestFromEoglasna(
-        ?int $limit,
-        string $model,
-        int $chunkSize,
-        int $overlap,
-        bool $syncGraph
-    ): array {
-        $decisionsProcessed = 0;
-        $documentsInserted = 0;
-        $errors = 0;
-        $syncedToGraph = 0;
+    protected function collectDecisionIds(): array
+    {
+        $ids = (array) $this->option('id');
 
-        // Query EOGLASNA notices that represent court decisions
-        $query = EoglasnaNotice::query()
-            ->whereNotNull('case_number')
-            ->whereNotNull('notice_documents_download_url')
-            ->orderBy('date_published', 'desc');
-
-        if ($limit) {
-            $query->limit($limit);
+        // If explicit IDs provided, use them
+        if (!empty($ids)) {
+            return array_filter(array_map('trim', $ids));
         }
 
-        foreach ($query->cursor() as $notice) {
-            try {
-                $decisionsProcessed++;
+        // Otherwise, search for IDs
+        $query = $this->option('query');
+        $params = $this->option('params');
 
-                // Parse metadata from EOGLASNA notice
-                $metadata = $this->parseEoglasnaMetadata($notice);
+        if ($query === null && $params === null) {
+            return [];
+        }
 
-                // Check if already ingested
-                $existing = CourtDecision::where('ecli', $metadata['ecli'])
-                    ->orWhere('case_number', $metadata['case_number'])
-                    ->first();
+        $limit = (int) $this->option('limit');
+        $page = (int) $this->option('page');
 
-                if ($existing) {
-                    $this->line("  Skipping already ingested: {$metadata['case_number']}");
-                    continue;
+        $this->line(sprintf(
+            'Searching decisions: query="%s" params="%s" limit=%d page=%d',
+            $query ?? 'none',
+            $params ?? 'none',
+            $limit,
+            $page
+        ));
+
+        try {
+            $result = $this->client->collectIdsFromList($query, $params, $limit, $page);
+            $collectedIds = $result['ids'] ?? [];
+
+            $this->info(sprintf('Found %d decision ID(s)', count($collectedIds)));
+
+            if ($this->option('verbose') && !empty($collectedIds)) {
+                $this->line('IDs: ' . implode(', ', array_slice($collectedIds, 0, 10)));
+                if (count($collectedIds) > 10) {
+                    $this->line('... and ' . (count($collectedIds) - 10) . ' more');
                 }
-
-                // Create parent CourtDecision record
-                $decisionId = (string) Str::ulid();
-                $decision = CourtDecision::create([
-                    'id' => $decisionId,
-                    'case_number' => $metadata['case_number'],
-                    'title' => $metadata['title'],
-                    'court' => $metadata['court'],
-                    'jurisdiction' => 'HR',
-                    'judge' => $metadata['judge'],
-                    'decision_date' => $metadata['decision_date'],
-                    'publication_date' => $metadata['publication_date'],
-                    'decision_type' => $metadata['decision_type'],
-                    'ecli' => $metadata['ecli'],
-                    'tags' => $metadata['tags'],
-                    'description' => $metadata['description'],
-                ]);
-
-                // Download and process decision documents
-                $docId = $metadata['ecli'] ?? $metadata['case_number'];
-                $documents = $this->fetchDecisionDocuments($notice, $decisionId, $docId);
-
-                if (empty($documents)) {
-                    $this->warn("  No documents for {$metadata['case_number']}");
-                    continue;
-                }
-
-                // Chunk the documents
-                $chunks = $this->chunkDocuments($documents, $chunkSize, $overlap, $metadata);
-
-                // Ingest into vector store
-                if (!empty($chunks)) {
-                    $result = $this->vectorStore->ingest($decisionId, $docId, $chunks, [
-                        'model' => $model,
-                        'provider' => 'openai',
-                    ]);
-
-                    $documentsInserted += $result['inserted'] ?? 0;
-                    $this->info("  Processed {$metadata['case_number']}: {$result['inserted']} chunks");
-                }
-
-                // Sync to graph database if requested
-                if ($syncGraph && $this->graphRag && method_exists($this->graphRag, 'syncCourtDecision')) {
-                    try {
-                        $this->graphRag->syncCourtDecision($decisionId);
-                        $syncedToGraph++;
-                    } catch (\Exception $e) {
-                        Log::warning('Failed to sync decision to graph', [
-                            'decision_id' => $decisionId,
-                            'error' => $e->getMessage(),
-                        ]);
-                    }
-                }
-
-            } catch (\Throwable $e) {
-                $errors++;
-                Log::error('Court decision ingestion failed', [
-                    'notice_uuid' => $notice->uuid ?? null,
-                    'error' => $e->getMessage(),
-                    'trace' => $e->getTraceAsString(),
-                ]);
-                $this->error("  Error processing notice: {$e->getMessage()}");
             }
+
+            return $collectedIds;
+        } catch (\Throwable $e) {
+            $this->error('Failed to search decisions: ' . $e->getMessage());
+            Log::error('Court decision search failed', [
+                'query' => $query,
+                'params' => $params,
+                'error' => $e->getMessage(),
+            ]);
+            return [];
+        }
+    }
+
+    protected function ingestDecisions(array $ids): array
+    {
+        $model = $this->option('model') ?: config('openai.models.embeddings');
+        $chunkChars = (int) ($this->option('chunk') ?? 1500);
+        $overlap = (int) ($this->option('overlap') ?? 200);
+        $prefer = $this->option('prefer') ?? 'auto';
+        $dry = (bool) $this->option('dry');
+
+        if (!in_array($prefer, ['auto', 'html', 'pdf'], true)) {
+            $this->warn("Invalid --prefer value '{$prefer}', using 'auto'");
+            $prefer = 'auto';
         }
 
-        return [
-            'decisions_processed' => $decisionsProcessed,
-            'documents_inserted' => $documentsInserted,
-            'errors' => $errors,
-            'synced_to_graph' => $syncedToGraph,
+        $options = [
             'model' => $model,
+            'chunk_chars' => $chunkChars,
+            'overlap' => $overlap,
+            'prefer' => $prefer,
+            'dry' => $dry,
         ];
-    }
 
-    protected function ingestFromUploads(
-        ?int $limit,
-        string $model,
-        int $chunkSize,
-        int $overlap,
-        bool $syncGraph
-    ): array {
-        // TODO: Implement ingestion from uploaded decision files
-        $this->warn('Ingestion from uploads not yet implemented');
-
-        return [
-            'decisions_processed' => 0,
-            'documents_inserted' => 0,
-            'errors' => 0,
-            'synced_to_graph' => 0,
-            'model' => $model,
-        ];
-    }
-
-    protected function parseEoglasnaMetadata(EoglasnaNotice $notice): array
-    {
-        $details = $notice->court_notice_details ?? [];
-
-        // Extract ECLI if available
-        $ecli = null;
-        if (!empty($details['ecli'])) {
-            $ecli = $details['ecli'];
-        } else {
-            // Try to generate ECLI from case number and court
-            $ecli = $this->generateEcli($notice);
+        if ($dry) {
+            $this->warn('DRY RUN MODE - No data will be persisted');
         }
 
-        // Parse decision type from notice type or title
-        $decisionType = $this->parseDecisionType($notice->notice_type, $notice->title);
+        $this->line(sprintf(
+            'Options: model=%s chunk_size=%d overlap=%d prefer=%s',
+            $model,
+            $chunkChars,
+            $overlap,
+            $prefer
+        ));
 
-        // Extract judge/panel information
-        $judge = null;
-        if (!empty($details['judge'])) {
-            $judge = $details['judge'];
-        } elseif (!empty($details['panel'])) {
-            $judge = 'Panel: ' . $details['panel'];
-        }
+        try {
+            $progressBar = $this->output->createProgressBar(count($ids));
+            $progressBar->start();
 
-        // Extract chamber
-        $chamber = $details['chamber'] ?? null;
+            $result = $this->ingest->ingestByIds($ids, $options);
 
-        return [
-            'case_number' => $notice->case_number,
-            'title' => $notice->title ?? "Case {$notice->case_number}",
-            'court' => $notice->court_name,
-            'court_code' => $notice->court_code,
-            'court_type' => $notice->court_type,
-            'chamber' => $chamber,
-            'judge' => $judge,
-            'decision_date' => $notice->date_published,
-            'publication_date' => $notice->date_published,
-            'decision_type' => $decisionType,
-            'ecli' => $ecli,
-            'tags' => array_filter([
-                $notice->case_type,
-                $notice->court_type,
-                $decisionType,
-            ]),
-            'description' => $notice->title,
-        ];
-    }
+            $progressBar->finish();
+            $this->newLine(2);
 
-    protected function generateEcli(EoglasnaNotice $notice): ?string
-    {
-        // ECLI format: ECLI:HR:COURT:YEAR:NUMBER
-        // Example: ECLI:HR:VSR:2023:123
-
-        if (!$notice->case_number || !$notice->date_published) {
-            return null;
-        }
-
-        // Extract court code from court name or use placeholder
-        $courtCode = $notice->court_code ?? 'COURT';
-
-        // Extract year from publication date
-        $year = $notice->date_published->format('Y');
-
-        // Clean case number to get numeric part
-        $number = preg_replace('/[^0-9]/', '', $notice->case_number);
-
-        return "ECLI:HR:{$courtCode}:{$year}:{$number}";
-    }
-
-    protected function parseDecisionType(string $noticeType, ?string $title): string
-    {
-        $lowerTitle = mb_strtolower($title ?? '');
-
-        if (mb_stripos($lowerTitle, 'presuda') !== false) {
-            return 'judgment';
-        } elseif (mb_stripos($lowerTitle, 'rješenje') !== false) {
-            return 'decision';
-        } elseif (mb_stripos($lowerTitle, 'zaključak') !== false) {
-            return 'conclusion';
-        } elseif (mb_stripos($lowerTitle, 'nalog') !== false) {
-            return 'order';
-        }
-
-        return 'other';
-    }
-
-    protected function fetchDecisionDocuments(
-        EoglasnaNotice $notice,
-        string $decisionId,
-        string $docId
-    ): array {
-        $documents = [];
-
-        // If notice has document download URL, fetch it
-        if ($notice->notice_documents_download_url) {
-            try {
-                $response = Http::timeout(30)->get($notice->notice_documents_download_url);
-
-                if ($response->successful()) {
-                    $content = $response->body();
-                    $mimeType = $response->header('Content-Type');
-
-                    // Store the document
-                    $baseDir = sprintf('court-decisions/%s', $decisionId);
-                    $fileName = 'decision-' . ($notice->uuid ?? Str::random(8)) . $this->getExtensionFromMime($mimeType);
-                    $filePath = $baseDir . '/' . $fileName;
-
-                    Storage::put($filePath, $content);
-
-                    // Record upload
-                    $this->recordDecisionUpload(
-                        $decisionId,
-                        $docId,
-                        $filePath,
-                        $fileName,
-                        $notice->notice_documents_download_url,
-                        $mimeType
-                    );
-
-                    // Extract text from document
-                    $text = $this->extractTextFromDocument($content, $mimeType);
-
-                    if ($text) {
-                        $documents[] = [
-                            'content' => $text,
-                            'source' => 'eoglasna',
-                            'source_id' => $notice->uuid,
-                        ];
-                    }
-                }
-            } catch (\Exception $e) {
-                Log::warning('Failed to fetch decision document', [
-                    'url' => $notice->notice_documents_download_url,
-                    'error' => $e->getMessage(),
-                ]);
-            }
-        }
-
-        // Fallback: use notice title and case information as minimal document
-        if (empty($documents) && $notice->title) {
-            $text = implode("\n\n", array_filter([
-                $notice->title,
-                "Case Number: {$notice->case_number}",
-                "Court: {$notice->court_name}",
-                "Date: {$notice->date_published?->format('Y-m-d')}",
-                "Type: {$notice->case_type}",
-            ]));
-
-            $documents[] = [
-                'content' => $text,
-                'source' => 'eoglasna',
-                'source_id' => $notice->uuid,
+            return $result;
+        } catch (\Throwable $e) {
+            $this->error('Ingestion failed: ' . $e->getMessage());
+            Log::error('Court decision ingestion failed', [
+                'ids_count' => count($ids),
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+            return [
+                'ids_processed' => 0,
+                'inserted' => 0,
+                'would_chunks' => 0,
+                'errors' => 1,
+                'skipped' => count($ids),
+                'model' => $model,
+                'dry' => $dry,
             ];
         }
-
-        return $documents;
     }
 
-    protected function extractTextFromDocument(string $content, ?string $mimeType): ?string
+    protected function displayResults(array $stats): void
     {
-        // For now, handle basic text formats
-        // TODO: Integrate with Textract or other document parsing services
+        $this->info('Ingestion completed!');
+        $this->newLine();
 
-        if (str_contains($mimeType ?? '', 'text/plain')) {
-            return $content;
-        }
-
-        if (str_contains($mimeType ?? '', 'text/html')) {
-            // Strip HTML tags
-            $text = html_entity_decode(strip_tags($content), ENT_QUOTES | ENT_HTML5, 'UTF-8');
-            return preg_replace('/\s+/u', ' ', $text ?? '');
-        }
-
-        // For PDF, DOCX, etc., return null (needs specialized processing)
-        return null;
+        $this->table(
+            ['Metric', 'Value'],
+            [
+                ['IDs Processed', $stats['ids_processed'] ?? 0],
+                ['Documents Inserted', $stats['inserted'] ?? 0],
+                ['Chunks Generated', $stats['would_chunks'] ?? 0],
+                ['Errors', $stats['errors'] ?? 0],
+                ['Skipped', $stats['skipped'] ?? 0],
+                ['Model', $stats['model'] ?? 'unknown'],
+                ['Dry Run', ($stats['dry'] ?? false) ? 'Yes' : 'No'],
+            ]
+        );
     }
 
-    protected function getExtensionFromMime(?string $mimeType): string
+    protected function syncToGraph(array $stats): void
     {
-        return match ($mimeType) {
-            'application/pdf' => '.pdf',
-            'text/html' => '.html',
-            'text/plain' => '.txt',
-            'application/msword' => '.doc',
-            'application/vnd.openxmlformats-officedocument.wordprocessingml.document' => '.docx',
-            default => '.bin',
-        };
-    }
-
-    protected function chunkDocuments(
-        array $documents,
-        int $chunkSize,
-        int $overlap,
-        array $metadata
-    ): array {
-        $chunks = [];
-        $chunkIndex = 0;
-
-        foreach ($documents as $doc) {
-            $content = $doc['content'] ?? '';
-            $textChunks = $this->splitIntoChunks($content, $chunkSize, $overlap);
-
-            foreach ($textChunks as $chunk) {
-                $chunks[] = [
-                    'content' => $chunk,
-                    'metadata' => array_merge($metadata, [
-                        'chunk_index' => $chunkIndex,
-                        'source' => $doc['source'] ?? null,
-                        'source_id' => $doc['source_id'] ?? null,
-                    ]),
-                    'chunk_index' => $chunkIndex,
-                    'source' => $doc['source'] ?? null,
-                    'source_id' => $doc['source_id'] ?? null,
-                ];
-                $chunkIndex++;
-            }
+        if (!$this->graphRag) {
+            $this->warn('GraphRagService not available, skipping graph sync');
+            return;
         }
 
-        return $chunks;
-    }
-
-    protected function splitIntoChunks(string $text, int $chunkSize, int $overlap): array
-    {
-        $text = trim($text);
-        if (mb_strlen($text) <= $chunkSize) {
-            return [$text];
+        if (($stats['inserted'] ?? 0) === 0) {
+            $this->line('No documents inserted, skipping graph sync');
+            return;
         }
 
-        $chunks = [];
-        $start = 0;
-        $textLen = mb_strlen($text);
+        $this->info('Syncing decisions to graph database...');
 
-        while ($start < $textLen) {
-            $end = min($start + $chunkSize, $textLen);
+        try {
+            // Get recently ingested decisions
+            $recentDecisions = DB::table('court_decisions')
+                ->orderBy('created_at', 'desc')
+                ->limit($stats['ids_processed'] ?? 10)
+                ->pluck('id');
 
-            // Try to break at sentence boundary
-            if ($end < $textLen) {
-                $lastPeriod = mb_strrpos(mb_substr($text, $start, $chunkSize), '.');
-                $lastQuestion = mb_strrpos(mb_substr($text, $start, $chunkSize), '?');
-                $lastExclaim = mb_strrpos(mb_substr($text, $start, $chunkSize), '!');
+            $synced = 0;
+            $errors = 0;
 
-                $boundary = max($lastPeriod, $lastQuestion, $lastExclaim);
-                if ($boundary !== false && $boundary > $chunkSize * 0.7) {
-                    $end = $start + $boundary + 1;
+            $progressBar = $this->output->createProgressBar($recentDecisions->count());
+            $progressBar->start();
+
+            foreach ($recentDecisions as $decisionId) {
+                try {
+                    $this->graphRag->syncCourtDecision($decisionId);
+                    $synced++;
+                } catch (\Throwable $e) {
+                    $errors++;
+                    Log::warning('Failed to sync decision to graph', [
+                        'decision_id' => $decisionId,
+                        'error' => $e->getMessage(),
+                    ]);
                 }
+                $progressBar->advance();
             }
 
-            $chunk = mb_substr($text, $start, $end - $start);
-            $chunks[] = trim($chunk);
+            $progressBar->finish();
+            $this->newLine(2);
 
-            $start = $end - $overlap;
+            $this->info(sprintf('Graph sync completed: %d synced, %d errors', $synced, $errors));
+        } catch (\Throwable $e) {
+            $this->error('Graph sync failed: ' . $e->getMessage());
+            Log::error('Graph sync failed', [
+                'error' => $e->getMessage(),
+            ]);
         }
-
-        return array_filter($chunks, fn($c) => trim($c) !== '');
-    }
-
-    protected function recordDecisionUpload(
-        string $decisionId,
-        string $docId,
-        string $relPath,
-        string $originalName,
-        ?string $sourceUrl,
-        ?string $mimeType
-    ): void {
-        $abs = Storage::path($relPath);
-        $size = is_file($abs) ? @filesize($abs) : null;
-        $sha = is_file($abs) ? @hash_file('sha256', $abs) : null;
-
-        CourtDecisionDocumentUpload::create([
-            'id' => (string) Str::ulid(),
-            'decision_id' => $decisionId,
-            'doc_id' => $docId,
-            'disk' => 'local',
-            'local_path' => $relPath,
-            'original_filename' => $originalName,
-            'mime_type' => $mimeType ?? 'application/octet-stream',
-            'file_size' => $size,
-            'sha256' => $sha,
-            'source_url' => $sourceUrl,
-            'uploaded_at' => now(),
-            'status' => 'stored',
-        ]);
     }
 }
