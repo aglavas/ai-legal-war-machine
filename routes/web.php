@@ -28,3 +28,7 @@ Route::view('/textract', 'textract')->name('textract.manager');
 
 // e-Oglasna monitoring dashboard
 Route::get('/eoglasna', \App\Http\Livewire\EoglasnaMonitoring::class)->name('eoglasna.monitoring');
+
+// Autonomous Agent Dashboard
+Route::get('/agent/dashboard', [\App\Http\Controllers\AgentController::class, 'dashboard'])->name('agent.dashboard');
+Route::get('/agent/run/{id}', [\App\Http\Controllers\AgentController::class, 'viewRun'])->name('agent.run');

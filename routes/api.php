@@ -51,3 +51,12 @@ Route::prefix('uploads')->group(function () {
     Route::post('{uploadId}/complete', [UploadController::class, 'complete']);
     Route::delete('{uploadId}', [UploadController::class, 'cancel']);
 });
+
+Route::prefix('agent')->group(function () {
+    // Research runs
+    Route::post('research/start', [\App\Http\Controllers\AgentController::class, 'startResearch']);
+    Route::get('research', [\App\Http\Controllers\AgentController::class, 'listResearch']);
+    Route::get('research/{id}', [\App\Http\Controllers\AgentController::class, 'getResearch']);
+    Route::get('research/{id}/evaluation', [\App\Http\Controllers\AgentController::class, 'getEvaluation']);
+    Route::delete('research/{id}', [\App\Http\Controllers\AgentController::class, 'deleteResearch']);
+});
