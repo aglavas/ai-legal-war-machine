@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Agents\AutonomousResearchAgent;
+use App\Jobs\ExecuteAgentResearch;
 use App\Models\AgentRun;
 use App\Services\AgentEvaluationService;
 use Illuminate\Http\Request;
@@ -39,6 +40,7 @@ class AgentController extends Controller
             'token_budget' => ['sometimes', 'numeric', 'min:0'],
             'cost_budget' => ['sometimes', 'numeric', 'min:0'],
             'time_limit_seconds' => ['sometimes', 'integer', 'min:10', 'max:7200'],
+            'async' => ['sometimes', 'boolean'],
         ]);
 
         $context = [
@@ -49,32 +51,51 @@ class AgentController extends Controller
         ];
 
         $constraints = [
-            'max_iterations' => $data['max_iterations'] ?? 10,
-            'threshold' => $data['threshold'] ?? 0.75,
-            'token_budget' => $data['token_budget'] ?? null,
-            'cost_budget' => $data['cost_budget'] ?? null,
-            'time_limit_seconds' => $data['time_limit_seconds'] ?? null,
+            'max_iterations' => $data['max_iterations'] ?? config('agent.defaults.max_iterations', 10),
+            'threshold' => $data['threshold'] ?? config('agent.defaults.threshold', 0.75),
+            'token_budget' => $data['token_budget'] ?? config('agent.defaults.token_budget'),
+            'cost_budget' => $data['cost_budget'] ?? config('agent.defaults.cost_budget'),
+            'time_limit_seconds' => $data['time_limit_seconds'] ?? config('agent.defaults.time_limit_seconds'),
         ];
 
         try {
             $run = $this->agent->startRun($data['objective'], $context, $constraints);
 
-            // Execute asynchronously (in production, this should be queued)
-            // For now, execute synchronously
-            $run = $this->agent->executeRun($run);
+            // Determine execution mode
+            $async = $data['async'] ?? config('agent.performance.async_execution', false);
 
-            return response()->json([
-                'success' => true,
-                'run' => [
-                    'id' => $run->id,
-                    'objective' => $run->objective,
-                    'status' => $run->status,
-                    'score' => $run->score,
-                    'iterations' => $run->current_iteration,
-                    'elapsed_seconds' => $run->elapsed_seconds,
-                    'final_output' => $run->final_output,
-                ],
-            ]);
+            if ($async) {
+                // Dispatch to queue for background execution
+                ExecuteAgentResearch::dispatch($run);
+
+                return response()->json([
+                    'success' => true,
+                    'async' => true,
+                    'run' => [
+                        'id' => $run->id,
+                        'objective' => $run->objective,
+                        'status' => $run->status,
+                        'message' => 'Research run started in background. Check status using GET /api/agent/research/' . $run->id,
+                    ],
+                ]);
+            } else {
+                // Execute synchronously
+                $run = $this->agent->executeRun($run);
+
+                return response()->json([
+                    'success' => true,
+                    'async' => false,
+                    'run' => [
+                        'id' => $run->id,
+                        'objective' => $run->objective,
+                        'status' => $run->status,
+                        'score' => $run->score,
+                        'iterations' => $run->current_iteration,
+                        'elapsed_seconds' => $run->elapsed_seconds,
+                        'final_output' => $run->final_output,
+                    ],
+                ]);
+            }
         } catch (\Exception $e) {
             Log::error('Failed to start research run', [
                 'objective' => $data['objective'],
