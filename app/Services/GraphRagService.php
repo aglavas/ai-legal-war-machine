@@ -108,6 +108,90 @@ class GraphRagService
     }
 
     /**
+     * Sync a court decision to graph database
+     */
+    public function syncCourtDecision(string $decisionId): void
+    {
+        // Get the CourtDecision parent record
+        $decision = DB::table('court_decisions')->where('id', $decisionId)->first();
+
+        if (!$decision) {
+            return;
+        }
+
+        // Get all document chunks for this decision
+        $documents = DB::table('court_decision_documents')
+            ->where('decision_id', $decisionId)
+            ->get();
+
+        foreach ($documents as $doc) {
+            // Create court decision document node
+            $this->graph->upsertNode('CourtDecisionDocument', $doc->id, [
+                'decision_id' => $doc->decision_id,
+                'doc_id' => $doc->doc_id,
+                'title' => $doc->title ?? $decision->title,
+                'case_number' => $decision->case_number,
+                'court' => $decision->court,
+                'jurisdiction' => $decision->jurisdiction,
+                'decision_date' => $decision->decision_date,
+                'decision_type' => $decision->decision_type,
+                'ecli' => $decision->ecli,
+                'chunk_index' => $doc->chunk_index,
+                'content_hash' => $doc->content_hash,
+            ]);
+
+            // Create court node if exists
+            if ($decision->court) {
+                $courtId = 'court_' . md5($decision->court);
+                $this->graph->upsertNode('Court', $courtId, [
+                    'name' => $decision->court,
+                    'jurisdiction' => $decision->jurisdiction,
+                ]);
+
+                $this->graph->createRelationship(
+                    'CourtDecisionDocument',
+                    $doc->id,
+                    'DECIDED_BY',
+                    'Court',
+                    $courtId
+                );
+            }
+
+            // Create jurisdiction node if exists
+            if ($decision->jurisdiction) {
+                $this->graph->upsertNode('Jurisdiction', 'jurisdiction_' . $decision->jurisdiction, [
+                    'name' => $decision->jurisdiction,
+                ]);
+
+                $this->graph->createRelationship(
+                    'CourtDecisionDocument',
+                    $doc->id,
+                    'BELONGS_TO_JURISDICTION',
+                    'Jurisdiction',
+                    'jurisdiction_' . $decision->jurisdiction
+                );
+            }
+
+            // Auto-tag the decision
+            $metadata = json_decode($doc->metadata ?? '[]', true);
+            $this->tagging->autoTag('CourtDecisionDocument', $doc->id, $doc->content, array_merge($metadata, [
+                'court' => $decision->court,
+                'case_number' => $decision->case_number,
+                'decision_type' => $decision->decision_type,
+            ]));
+
+            // Create keyword relationships
+            $this->extractAndLinkKeywords('CourtDecisionDocument', $doc->id, $doc->content);
+
+            // Extract and create citation relationships (decisions cite laws with article numbers)
+            $this->extractAndCreateCitationsFromDecision('CourtDecisionDocument', $doc->id, $doc->content);
+
+            // Find and create similarity relationships
+            $this->createSimilarityRelationships('CourtDecisionDocument', $doc->id, $doc->embedding_vector ?? null);
+        }
+    }
+
+    /**
      * Extract keywords and create keyword nodes with relationships
      */
     protected function extractAndLinkKeywords(string $nodeLabel, string $nodeId, string $content): void
@@ -228,6 +312,323 @@ class GraphRagService
         $maxFreq = max($topKeywords ?: [1]);
 
         return array_map(fn($freq) => round($freq / $maxFreq, 2), $topKeywords);
+    }
+
+    /**
+     * Extract citations from court decisions with article-level precision
+     * This method is specifically designed for court decisions citing laws
+     */
+    protected function extractAndCreateCitationsFromDecision(string $nodeLabel, string $nodeId, string $content): void
+    {
+        // Use HrLegalCitationsDetector for comprehensive citation extraction
+        try {
+            $detector = app(\App\Services\HrLegalCitationsDetector::class);
+            $allCitations = $detector->detectAll($content);
+
+            // Process statute citations (laws with article numbers)
+            if (!empty($allCitations['statutes'])) {
+                foreach ($allCitations['statutes'] as $citation) {
+                    $this->processCitationToLaw($nodeLabel, $nodeId, $citation);
+                }
+            }
+
+            // Process Narodne Novine citations
+            if (!empty($allCitations['nn'])) {
+                foreach ($allCitations['nn'] as $citation) {
+                    $this->processNNCitation($nodeLabel, $nodeId, $citation);
+                }
+            }
+
+            // Process ECLI citations (to other court decisions)
+            if (!empty($allCitations['ecli'])) {
+                foreach ($allCitations['ecli'] as $ecliCitation) {
+                    $this->processECLICitation($nodeLabel, $nodeId, $ecliCitation);
+                }
+            }
+
+            // Process case number references
+            if (!empty($allCitations['cases'])) {
+                foreach ($allCitations['cases'] as $caseCitation) {
+                    $this->processCaseNumberCitation($nodeLabel, $nodeId, $caseCitation);
+                }
+            }
+
+        } catch (\Exception $e) {
+            Log::warning('Failed to extract citations from decision using detector', [
+                'node_label' => $nodeLabel,
+                'node_id' => $nodeId,
+                'error' => $e->getMessage(),
+            ]);
+
+            // Fallback to basic extraction
+            $this->extractAndCreateCitations($nodeLabel, $nodeId, $content);
+        }
+    }
+
+    /**
+     * Process a statute citation to create CITES relationship with article number
+     * Citation format from StatuteCitationDetector:
+     * ['raw' => '...', 'law' => 'ZPP', 'article' => '110', 'paragraph' => '2', 'item' => '3', 'alineja' => null, 'canonical' => '...']
+     */
+    protected function processCitationToLaw(string $nodeLabel, string $nodeId, array $citation): void
+    {
+        try {
+            $articleNumber = $citation['article'] ?? null;
+            $lawIdentifier = $citation['law'] ?? null; // This is the normalized law abbreviation (e.g., "ZPP")
+
+            if (!$lawIdentifier) {
+                // If no specific law, skip (could be a bare article reference)
+                return;
+            }
+
+            // Try to find the law by the abbreviation in metadata or keywords
+            $law = DB::table('laws')
+                ->where(function ($query) use ($lawIdentifier) {
+                    $query->whereRaw("metadata::text ILIKE ?", ["%{$lawIdentifier}%"])
+                        ->orWhereRaw("keywords_text ILIKE ?", ["%{$lawIdentifier}%"])
+                        ->orWhere('title', 'ILIKE', "%{$lawIdentifier}%");
+                })
+                ->first();
+
+            if (!$law) {
+                return;
+            }
+
+            // Ensure the law node exists in graph
+            $this->graph->upsertNode('LawDocument', $law->id, [
+                'doc_id' => $law->doc_id,
+                'title' => $law->title,
+                'law_number' => $law->law_number,
+            ]);
+
+            // Create CITES relationship with article number and subdivisions
+            $relationshipProps = [
+                'citation_type' => 'statute',
+                'law_abbreviation' => $lawIdentifier,
+                'created_at' => now()->toIso8601String(),
+            ];
+
+            if ($articleNumber) {
+                $relationshipProps['article'] = $articleNumber;
+            }
+            if (!empty($citation['paragraph'])) {
+                $relationshipProps['paragraph'] = $citation['paragraph'];
+            }
+            if (!empty($citation['item'])) {
+                $relationshipProps['item'] = $citation['item'];
+            }
+            if (!empty($citation['alineja'])) {
+                $relationshipProps['alineja'] = $citation['alineja'];
+            }
+
+            $this->graph->createRelationship(
+                $nodeLabel,
+                $nodeId,
+                'CITES',
+                'LawDocument',
+                $law->id,
+                $relationshipProps
+            );
+
+            Log::info('Created citation relationship from decision to law', [
+                'decision_node' => $nodeId,
+                'law_id' => $law->id,
+                'article' => $articleNumber,
+                'paragraph' => $citation['paragraph'] ?? null,
+            ]);
+
+        } catch (\Exception $e) {
+            Log::warning('Failed to process statute citation', [
+                'citation' => $citation,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    /**
+     * Process Narodne Novine citation
+     * Citation format from NarodneNovineDetector:
+     * ['raw' => '...', 'issues' => ['123/20', '45/21']]
+     */
+    protected function processNNCitation(string $nodeLabel, string $nodeId, array $citation): void
+    {
+        try {
+            $issues = $citation['issues'] ?? [];
+
+            if (empty($issues)) {
+                return;
+            }
+
+            // Process each NN issue number
+            foreach ($issues as $nnNumber) {
+                // Find law by NN number
+                $law = DB::table('laws')
+                    ->where('law_number', $nnNumber)
+                    ->orWhereRaw("metadata::text ILIKE ?", ["%{$nnNumber}%"])
+                    ->first();
+
+                if (!$law) {
+                    continue;
+                }
+
+                // Ensure the law node exists in graph
+                $this->graph->upsertNode('LawDocument', $law->id, [
+                    'doc_id' => $law->doc_id,
+                    'title' => $law->title,
+                    'law_number' => $law->law_number,
+                ]);
+
+                // Create CITES relationship
+                $this->graph->createRelationship(
+                    $nodeLabel,
+                    $nodeId,
+                    'CITES',
+                    'LawDocument',
+                    $law->id,
+                    [
+                        'citation_type' => 'nn_reference',
+                        'nn_number' => $nnNumber,
+                        'created_at' => now()->toIso8601String(),
+                    ]
+                );
+            }
+
+        } catch (\Exception $e) {
+            Log::warning('Failed to process NN citation', [
+                'citation' => $citation,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    /**
+     * Process ECLI citation (to another court decision)
+     * Citation format from EcliDetector:
+     * ['raw' => 'ECLI:HR:...', 'canonical' => 'ECLI:HR:...']
+     */
+    protected function processECLICitation(string $nodeLabel, string $nodeId, array $ecliCitation): void
+    {
+        try {
+            $ecli = $ecliCitation['canonical'] ?? $ecliCitation['raw'] ?? null;
+
+            if (!$ecli) {
+                return;
+            }
+
+            // Find decision by ECLI
+            $referencedDecision = DB::table('court_decisions')
+                ->where('ecli', $ecli)
+                ->first();
+
+            if (!$referencedDecision) {
+                return;
+            }
+
+            // Get a representative document chunk for the decision
+            $decisionDoc = DB::table('court_decision_documents')
+                ->where('decision_id', $referencedDecision->id)
+                ->first();
+
+            if (!$decisionDoc) {
+                return;
+            }
+
+            // Ensure the decision node exists in graph
+            $this->graph->upsertNode('CourtDecisionDocument', $decisionDoc->id, [
+                'decision_id' => $referencedDecision->id,
+                'case_number' => $referencedDecision->case_number,
+                'ecli' => $referencedDecision->ecli,
+            ]);
+
+            // Create REFERENCES relationship
+            $this->graph->createRelationship(
+                $nodeLabel,
+                $nodeId,
+                'REFERENCES',
+                'CourtDecisionDocument',
+                $decisionDoc->id,
+                [
+                    'citation_type' => 'ecli',
+                    'ecli' => $ecli,
+                    'created_at' => now()->toIso8601String(),
+                ]
+            );
+
+        } catch (\Exception $e) {
+            Log::warning('Failed to process ECLI citation', [
+                'ecli' => $ecliCitation,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    /**
+     * Process case number citation
+     * Citation format from CaseNumberDetector:
+     * ['raw' => '...', 'prefix' => 'Rev', 'number' => '123', 'year' => '2020', 'canonical' => 'Rev 123/2020']
+     */
+    protected function processCaseNumberCitation(string $nodeLabel, string $nodeId, array $citation): void
+    {
+        try {
+            $canonical = $citation['canonical'] ?? null;
+
+            if (!$canonical) {
+                return;
+            }
+
+            // Find decision by case number (try both canonical format and partial matches)
+            $referencedDecision = DB::table('court_decisions')
+                ->where(function ($query) use ($canonical, $citation) {
+                    $query->where('case_number', 'LIKE', "%{$canonical}%");
+
+                    // Also try matching with the individual components
+                    if (!empty($citation['prefix']) && !empty($citation['number']) && !empty($citation['year'])) {
+                        $query->orWhere('case_number', 'LIKE', "%{$citation['prefix']}%{$citation['number']}%{$citation['year']}%");
+                    }
+                })
+                ->first();
+
+            if (!$referencedDecision) {
+                return;
+            }
+
+            // Get a representative document chunk for the decision
+            $decisionDoc = DB::table('court_decision_documents')
+                ->where('decision_id', $referencedDecision->id)
+                ->first();
+
+            if (!$decisionDoc) {
+                return;
+            }
+
+            // Ensure the decision node exists in graph
+            $this->graph->upsertNode('CourtDecisionDocument', $decisionDoc->id, [
+                'decision_id' => $referencedDecision->id,
+                'case_number' => $referencedDecision->case_number,
+                'ecli' => $referencedDecision->ecli,
+            ]);
+
+            // Create REFERENCES relationship
+            $this->graph->createRelationship(
+                $nodeLabel,
+                $nodeId,
+                'REFERENCES',
+                'CourtDecisionDocument',
+                $decisionDoc->id,
+                [
+                    'citation_type' => 'case_number',
+                    'case_number' => $canonical,
+                    'prefix' => $citation['prefix'] ?? null,
+                    'created_at' => now()->toIso8601String(),
+                ]
+            );
+
+        } catch (\Exception $e) {
+            Log::warning('Failed to process case number citation', [
+                'citation' => $citation,
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 
     /**
@@ -633,6 +1034,35 @@ class GraphRagService
                         $errors++;
                         Log::error('Failed to sync case to graph', [
                             'case_id' => $case->id,
+                            'error' => $e->getMessage(),
+                        ]);
+                    }
+                }
+            });
+
+        return ['synced' => $synced, 'errors' => $errors];
+    }
+
+    /**
+     * Batch sync all court decisions to graph database
+     */
+    public function syncAllCourtDecisions(): array
+    {
+        $batchSize = config('neo4j.sync.batch_size', 100);
+        $synced = 0;
+        $errors = 0;
+
+        DB::table('court_decisions')
+            ->orderBy('id')
+            ->chunk($batchSize, function ($decisions) use (&$synced, &$errors) {
+                foreach ($decisions as $decision) {
+                    try {
+                        $this->syncCourtDecision($decision->id);
+                        $synced++;
+                    } catch (\Exception $e) {
+                        $errors++;
+                        Log::error('Failed to sync court decision to graph', [
+                            'decision_id' => $decision->id,
                             'error' => $e->getMessage(),
                         ]);
                     }

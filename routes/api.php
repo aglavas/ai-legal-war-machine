@@ -4,6 +4,7 @@ use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\OpenAIController;
 use App\Http\Controllers\UploadController;
 use App\Http\Controllers\IngestController;
+use App\Http\Controllers\SearchController;
 
 Route::prefix('openai')->group(function () {
     Route::post('responses', [OpenAIController::class, 'responses']);
@@ -52,6 +53,7 @@ Route::prefix('uploads')->group(function () {
     Route::delete('{uploadId}', [UploadController::class, 'cancel']);
 });
 
+
 Route::prefix('agent')->group(function () {
     // Research runs
     Route::post('research/start', [\App\Http\Controllers\AgentController::class, 'startResearch']);
@@ -59,4 +61,19 @@ Route::prefix('agent')->group(function () {
     Route::get('research/{id}', [\App\Http\Controllers\AgentController::class, 'getResearch']);
     Route::get('research/{id}/evaluation', [\App\Http\Controllers\AgentController::class, 'getEvaluation']);
     Route::delete('research/{id}', [\App\Http\Controllers\AgentController::class, 'deleteResearch']);
+});
+
+Route::prefix('search')->group(function () {
+    // Unified search across all corpora
+    Route::post('/', [SearchController::class, 'search']);
+
+    // Corpus-specific search
+    Route::post('/laws', [SearchController::class, 'searchLaws']);
+    Route::post('/decisions', [SearchController::class, 'searchDecisions']);
+    Route::post('/cases', [SearchController::class, 'searchCases']);
+
+    // Advanced search
+    Route::post('/hybrid', [SearchController::class, 'hybridSearch']);
+    Route::post('/with-citations', [SearchController::class, 'searchWithCitations']);
+
 });
