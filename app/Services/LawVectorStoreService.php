@@ -32,10 +32,14 @@ class LawVectorStoreService
         $ingestedId = $options['ingested_law_id'] ?? null;
 
         $inputs = array_map(fn($d) => (string)$d['content'], $docs);
-        $emb = $this->openai->embeddings($inputs, $model);
+        $emb = $this->callEmbeddingsWithRetry($inputs, $model, $docId);
         $data = $emb['data'] ?? [];
         if (count($data) !== count($docs)) {
-            Log::warning('Embedding count mismatch (laws)', ['docs' => count($docs), 'embeddings' => count($data)]);
+            Log::warning('Embedding count mismatch (laws)', [
+                'docs' => count($docs),
+                'embeddings' => count($data),
+                'doc_id' => $docId,
+            ]);
         }
         $dims = isset($data[0]['embedding']) ? count($data[0]['embedding']) : null;
 
@@ -113,17 +117,32 @@ class LawVectorStoreService
     {
         // Only map known scalar columns; leave the rest inside metadata JSON
         $map = [];
+
+        // Map scalar text columns
         foreach ([
                      'title','law_number','jurisdiction','country','language','version','chapter','section','source_url'
                  ] as $key) {
-            if (isset($meta[$key])) $map[$key] = $meta[$key];
+            if (isset($meta[$key])) {
+                $map[$key] = $meta[$key];
+            }
         }
+
+        // Map date columns - ensure they're present when supplied
+        // Use null coalescing to handle empty strings
         foreach ([
                      'promulgation_date','effective_date','repeal_date'
                  ] as $dateKey) {
-            if (!empty($meta[$dateKey])) $map[$dateKey] = $meta[$dateKey];
+            if (!empty($meta[$dateKey])) {
+                $map[$dateKey] = $meta[$dateKey];
+            }
         }
-        if (isset($meta['tags'])) $map['tags'] = json_encode((array)$meta['tags'], JSON_UNESCAPED_UNICODE);
+
+        // Ensure tags are always stored as JSON array
+        if (isset($meta['tags'])) {
+            $tags = is_array($meta['tags']) ? $meta['tags'] : [$meta['tags']];
+            $map['tags'] = json_encode(array_values(array_filter($tags)), JSON_UNESCAPED_UNICODE);
+        }
+
         return $map;
     }
 
@@ -149,5 +168,112 @@ class LawVectorStoreService
     protected function toPgVectorCastLiteral(array $vec): string
     {
         return "'" . $this->toPgVectorLiteral($vec) . "'::vector";
+    }
+
+    /**
+     * Call embeddings API with exponential backoff and jitter
+     *
+     * Implements robust retry logic for embedding generation:
+     * - Tracks API call duration for performance monitoring
+     * - Exponential backoff with jitter to handle rate limits
+     * - Detailed logging of retries and failures
+     * - Preserves error context for debugging
+     *
+     * @param array $inputs Array of text inputs to embed
+     * @param string $model Embedding model to use
+     * @param string $docId Document ID for logging context
+     * @param int $maxRetries Maximum number of retry attempts (default: 3)
+     * @return array Embeddings response from API
+     * @throws \Exception If all retries are exhausted
+     */
+    protected function callEmbeddingsWithRetry(array $inputs, string $model, string $docId, int $maxRetries = 3): array
+    {
+        $attempt = 0;
+        $lastException = null;
+        $inputCount = count($inputs);
+
+        while ($attempt < $maxRetries) {
+            $attempt++;
+
+            try {
+                $startTime = microtime(true);
+                $result = $this->openai->embeddings($inputs, $model);
+                $duration = microtime(true) - $startTime;
+
+                if ($attempt > 1) {
+                    Log::info('Embeddings call succeeded after retry', [
+                        'doc_id' => $docId,
+                        'attempt' => $attempt,
+                        'input_count' => $inputCount,
+                        'model' => $model,
+                        'duration_seconds' => round($duration, 3),
+                    ]);
+                }
+
+                return $result;
+
+            } catch (\Throwable $e) {
+                $lastException = $e;
+
+                Log::warning('Embeddings call failed', [
+                    'doc_id' => $docId,
+                    'attempt' => $attempt,
+                    'max_retries' => $maxRetries,
+                    'input_count' => $inputCount,
+                    'model' => $model,
+                    'error' => $e->getMessage(),
+                ]);
+
+                // Don't sleep after the last attempt
+                if ($attempt < $maxRetries) {
+                    $delay = $this->calculateBackoffDelay($attempt);
+                    Log::debug('Retrying embeddings call after delay', [
+                        'doc_id' => $docId,
+                        'delay_ms' => $delay,
+                        'next_attempt' => $attempt + 1,
+                    ]);
+                    usleep($delay * 1000);
+                }
+            }
+        }
+
+        // All retries exhausted
+        Log::error('Embeddings call failed after all retries', [
+            'doc_id' => $docId,
+            'total_attempts' => $attempt,
+            'input_count' => $inputCount,
+            'model' => $model,
+            'error' => $lastException->getMessage(),
+        ]);
+
+        throw new \Exception(
+            "Failed to generate embeddings after {$maxRetries} attempts for doc_id: {$docId}",
+            0,
+            $lastException
+        );
+    }
+
+    /**
+     * Calculate exponential backoff delay with jitter
+     *
+     * Uses configurable base delay and jitter percentage.
+     * Configuration keys:
+     * - services.embeddings.retry_base_delay (default: 1000ms)
+     * - services.embeddings.retry_jitter_percent (default: 0.5 = 50%)
+     *
+     * @param int $attempt Attempt number (1-based)
+     * @return int Delay in milliseconds
+     */
+    protected function calculateBackoffDelay(int $attempt): int
+    {
+        // Exponential backoff: base_delay * 2^(attempt-1)
+        $baseDelay = config('services.embeddings.retry_base_delay', 1000); // 1 second default
+        $exponentialDelay = $baseDelay * pow(2, $attempt - 1);
+
+        // Add jitter: random value between 0 and configured percentage of the delay
+        $jitterPercent = config('services.embeddings.retry_jitter_percent', 0.5);
+        $jitter = rand(0, (int)($exponentialDelay * $jitterPercent));
+
+        return (int)($exponentialDelay + $jitter);
     }
 }

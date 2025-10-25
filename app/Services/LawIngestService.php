@@ -58,7 +58,7 @@ class LawIngestService
                     continue;
                 }
 
-                $html = Http::retry(2, 200)->get($htmlUrl)->throw()->body();
+                $html = $this->fetchWithRetry($htmlUrl, 'law_html');
 
                 // persist source for traceability
                 $baseDir = sprintf('laws/%s/%s/act-%s', $law['year'], $law['edition'], $law['act']);
@@ -102,14 +102,16 @@ class LawIngestService
                 $fullPdfUrl = $law['pdf_url'] ?? null;
                 if ($fullPdfUrl) {
                     try {
-                        $resp = Http::retry(2, 250)->get($fullPdfUrl);
-                        if ($resp->successful() && stripos($resp->header('Content-Type',''), 'pdf') !== false) {
-                            $pdfRelPath = $baseDir.'/full.pdf';
-                            Storage::put($pdfRelPath, $resp->body());
-                            $this->recordLawUpload($ingested->id, $docId, $pdfRelPath, basename(parse_url($fullPdfUrl, PHP_URL_PATH)) ?: 'full.pdf', $fullPdfUrl);
-                        }
+                        $pdfContent = $this->fetchWithRetry($fullPdfUrl, 'law_pdf', true);
+                        $pdfRelPath = $baseDir.'/full.pdf';
+                        Storage::put($pdfRelPath, $pdfContent);
+                        $this->recordLawUpload($ingested->id, $docId, $pdfRelPath, basename(parse_url($fullPdfUrl, PHP_URL_PATH)) ?: 'full.pdf', $fullPdfUrl);
                     } catch (\Throwable $e) {
-                        Log::warning('Failed downloading law PDF', ['url' => $fullPdfUrl, 'err' => $e->getMessage()]);
+                        Log::warning('Failed downloading law PDF after retries', [
+                            'url' => $fullPdfUrl,
+                            'error' => $e->getMessage(),
+                            'doc_id' => $docId,
+                        ]);
                     }
                 }
 
@@ -157,21 +159,30 @@ class LawIngestService
                         'file_sha256' => ($p = Storage::path($pdfRelPath)) && is_file($p) ? hash_file('sha256', $p) : null,
                     ];
 
+                    // Build law metadata ensuring all fields are present uniformly
+                    $lawMeta = [
+                        'title' => $law['title'] ?? null,
+                        'law_number' => (string)($law['act'] ?? ''),
+                        'jurisdiction' => 'HR',
+                        'country' => 'HR',
+                        'language' => 'hr',
+                        'version' => 'consolidated',
+                        'promulgation_date' => $law['date_publication'] ?? null,
+                        'effective_date' => $law['date_publication'] ?? null, // Consolidated laws are effective
+                        'source_url' => $law['html_url'] ?? null,
+                        // Tags should be actual tags, not heading_chain
+                        'tags' => array_values(array_filter([
+                            $law['type_document'] ?? null,
+                            'consolidated',
+                            'HR',
+                        ])),
+                    ];
+
                     $docs[] = [
                         'content' => $plain,
                         'metadata' => $this->meta->buildArticleMetadata($ctx),
                         'chunk_index' => 0,
-                        'law_meta' => [
-                            'title' => $law['title'] ?? null,
-                            'law_number' => (string)($law['act'] ?? ''),
-                            'jurisdiction' => 'HR',
-                            'country' => 'HR',
-                            'language' => 'hr',
-                            'promulgation_date' => $law['date_publication'] ?? null,
-                            'source_url' => $law['html_url'] ?? null,
-                            'version' => 'consolidated',
-                            'tags' => $art['heading_chain'] ?? [],
-                        ],
+                        'law_meta' => $lawMeta,
                     ];
                     $countArticles++;
                 }
@@ -233,5 +244,121 @@ class LawIngestService
         $text = html_entity_decode(strip_tags($html), ENT_QUOTES | ENT_HTML5, 'UTF-8');
         $text = preg_replace('/\s+/u', ' ', $text ?? '');
         return trim($text);
+    }
+
+    /**
+     * Fetch URL with exponential backoff and jitter
+     *
+     * Implements retry logic with:
+     * - Exponential backoff: 1s, 2s, 4s delays
+     * - Random jitter (0-50% of delay) to avoid thundering herd
+     * - Structured logging for all attempts and failures
+     * - Content-type validation for PDFs
+     *
+     * @param string $url URL to fetch
+     * @param string $context Context for logging (e.g., 'law_html', 'law_pdf')
+     * @param bool $isPdf Whether to validate PDF content type
+     * @param int $maxRetries Maximum number of retry attempts (default: 3)
+     * @return string Response body
+     * @throws \Exception If all retries are exhausted
+     */
+    protected function fetchWithRetry(string $url, string $context, bool $isPdf = false, int $maxRetries = 3): string
+    {
+        $attempt = 0;
+        $lastException = null;
+
+        while ($attempt < $maxRetries) {
+            $attempt++;
+
+            try {
+                $response = Http::timeout(60)->get($url);
+
+                if ($response->successful()) {
+                    // For PDFs, verify content type
+                    if ($isPdf && stripos($response->header('Content-Type', ''), 'pdf') === false) {
+                        throw new \Exception("Expected PDF content type, got: " . $response->header('Content-Type'));
+                    }
+
+                    if ($attempt > 1) {
+                        Log::info('HTTP fetch succeeded after retry', [
+                            'url' => $url,
+                            'context' => $context,
+                            'attempt' => $attempt,
+                            'is_pdf' => $isPdf,
+                        ]);
+                    }
+
+                    return $response->body();
+                }
+
+                throw new \Exception("HTTP {$response->status()}");
+
+            } catch (\Throwable $e) {
+                $lastException = $e;
+
+                Log::warning('HTTP fetch failed', [
+                    'url' => $url,
+                    'context' => $context,
+                    'attempt' => $attempt,
+                    'max_retries' => $maxRetries,
+                    'is_pdf' => $isPdf,
+                    'error' => $e->getMessage(),
+                ]);
+
+                // Don't sleep after the last attempt
+                if ($attempt < $maxRetries) {
+                    $delay = $this->calculateBackoffDelay($attempt);
+                    Log::debug('Retrying HTTP fetch after delay', [
+                        'url' => $url,
+                        'delay_ms' => $delay,
+                        'next_attempt' => $attempt + 1,
+                    ]);
+                    usleep($delay * 1000);
+                }
+            }
+        }
+
+        // All retries exhausted
+        Log::error('HTTP fetch failed after all retries', [
+            'url' => $url,
+            'context' => $context,
+            'total_attempts' => $attempt,
+            'is_pdf' => $isPdf,
+            'error' => $lastException->getMessage(),
+        ]);
+
+        throw new \Exception(
+            "Failed to fetch {$context} after {$maxRetries} attempts: {$url}",
+            0,
+            $lastException
+        );
+    }
+
+    /**
+     * Calculate exponential backoff delay with jitter
+     *
+     * Formula: base_delay * 2^(attempt-1) + random_jitter
+     * Example delays:
+     * - Attempt 1: 1000ms + jitter (1000-1500ms)
+     * - Attempt 2: 2000ms + jitter (2000-3000ms)
+     * - Attempt 3: 4000ms + jitter (4000-6000ms)
+     *
+     * Jitter helps distribute retry attempts and avoid thundering herd problem
+     * when multiple processes are retrying simultaneously.
+     *
+     * @param int $attempt Attempt number (1-based)
+     * @return int Delay in milliseconds
+     */
+    protected function calculateBackoffDelay(int $attempt): int
+    {
+        // Exponential backoff: base_delay * 2^(attempt-1)
+        $baseDelay = config('services.law_ingest.retry_base_delay', 1000); // 1 second default
+        $exponentialDelay = $baseDelay * pow(2, $attempt - 1);
+
+        // Add jitter: random value between 0 and 50% of the delay
+        $jitterPercent = config('services.law_ingest.retry_jitter_percent', 0.5);
+        $jitter = rand(0, (int)($exponentialDelay * $jitterPercent));
+
+        return (int)($exponentialDelay + $jitter);
     }
 }
