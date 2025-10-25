@@ -4,6 +4,7 @@ use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\OpenAIController;
 use App\Http\Controllers\UploadController;
 use App\Http\Controllers\IngestController;
+use App\Http\Controllers\SearchController;
 
 Route::prefix('openai')->group(function () {
     Route::post('responses', [OpenAIController::class, 'responses']);
@@ -50,4 +51,18 @@ Route::prefix('uploads')->group(function () {
         ->where(['index' => '[0-9]+']);
     Route::post('{uploadId}/complete', [UploadController::class, 'complete']);
     Route::delete('{uploadId}', [UploadController::class, 'cancel']);
+});
+
+Route::prefix('search')->group(function () {
+    // Unified search across all corpora
+    Route::post('/', [SearchController::class, 'search']);
+
+    // Corpus-specific search
+    Route::post('/laws', [SearchController::class, 'searchLaws']);
+    Route::post('/decisions', [SearchController::class, 'searchDecisions']);
+    Route::post('/cases', [SearchController::class, 'searchCases']);
+
+    // Advanced search
+    Route::post('/hybrid', [SearchController::class, 'hybridSearch']);
+    Route::post('/with-citations', [SearchController::class, 'searchWithCitations']);
 });
