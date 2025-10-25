@@ -9,6 +9,26 @@ use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
+/**
+ * Command to backfill AI-generated metadata for ingested laws.
+ *
+ * This command identifies laws lacking AI-generated metadata and dispatches
+ * jobs to generate it. Supports batch processing with rate limiting to avoid
+ * overwhelming the OpenAI API.
+ *
+ * Usage examples:
+ *   # Preview what would be processed
+ *   php artisan laws:regen-metadata --dry-run
+ *
+ *   # Process specific law
+ *   php artisan laws:regen-metadata --doc-id=nn-2021-12-1234
+ *
+ *   # Process all with custom batch size and rate limit
+ *   php artisan laws:regen-metadata --batch-size=5 --rate-limit=30
+ *
+ *   # Force regeneration even if metadata exists
+ *   php artisan laws:regen-metadata --force
+ */
 class LawsRegenMetadata extends Command
 {
     /**
@@ -21,7 +41,8 @@ class LawsRegenMetadata extends Command
                             {--doc-id= : Filter by specific doc_id}
                             {--batch-size=10 : Number of laws to process per batch}
                             {--rate-limit=60 : Seconds to wait between batches}
-                            {--force : Force regeneration even if metadata exists}';
+                            {--force : Force regeneration even if metadata exists}
+                            {--limit= : Maximum number of laws to process (useful for testing)}';
 
     /**
      * The console command description.
@@ -40,8 +61,36 @@ class LawsRegenMetadata extends Command
         $batchSize = (int) $this->option('batch-size');
         $rateLimit = (int) $this->option('rate-limit');
         $force = $this->option('force');
+        $limit = $this->option('limit') ? (int) $this->option('limit') : null;
+
+        // Validate options
+        if ($batchSize < 1) {
+            $this->error('Batch size must be at least 1');
+            return self::FAILURE;
+        }
+
+        if ($rateLimit < 0) {
+            $this->error('Rate limit cannot be negative');
+            return self::FAILURE;
+        }
+
+        if ($limit !== null && $limit < 1) {
+            $this->error('Limit must be at least 1');
+            return self::FAILURE;
+        }
 
         $this->info('Starting laws metadata regeneration...');
+        $this->table(
+            ['Option', 'Value'],
+            [
+                ['Dry Run', $dryRun ? 'Yes' : 'No'],
+                ['Doc ID Filter', $docIdFilter ?? 'None'],
+                ['Batch Size', $batchSize],
+                ['Rate Limit', $rateLimit . 's between batches'],
+                ['Force Regeneration', $force ? 'Yes' : 'No'],
+                ['Limit', $limit ?? 'None'],
+            ]
+        );
         $this->newLine();
 
         // Build query for laws needing metadata
@@ -60,6 +109,11 @@ class LawsRegenMetadata extends Command
             });
         }
 
+        // Apply limit if specified
+        if ($limit !== null) {
+            $query->limit($limit);
+        }
+
         $totalCount = $query->count();
 
         if ($totalCount === 0) {
@@ -67,7 +121,11 @@ class LawsRegenMetadata extends Command
             return self::SUCCESS;
         }
 
-        $this->info("Found {$totalCount} law(s) needing metadata generation.");
+        $effectiveCount = $limit !== null ? min($totalCount, $limit) : $totalCount;
+        $this->info("Found {$effectiveCount} law(s) needing metadata generation.");
+        if ($limit !== null && $totalCount > $limit) {
+            $this->warn("Note: Total available is {$totalCount}, but processing only {$limit} due to --limit option");
+        }
         $this->newLine();
 
         if ($dryRun) {
@@ -164,6 +222,7 @@ class LawsRegenMetadata extends Command
         $this->newLine(2);
 
         // Summary
+        $this->newLine();
         $this->info('Metadata regeneration complete!');
         $this->table(
             ['Metric', 'Count'],
@@ -171,17 +230,24 @@ class LawsRegenMetadata extends Command
                 ['Total processed', $processed],
                 ['Jobs dispatched', $dispatched],
                 ['Failed', $failed],
+                ['Success rate', $dispatched > 0 ? round(($dispatched / $processed) * 100, 2) . '%' : 'N/A'],
                 ['Batches', $batchCount],
             ]
         );
+
+        if ($failed > 0) {
+            $this->warn("Warning: {$failed} law(s) failed to dispatch. Check logs for details.");
+        }
 
         Log::info('Laws metadata regeneration completed', [
             'total_processed' => $processed,
             'dispatched' => $dispatched,
             'failed' => $failed,
+            'success_rate' => $dispatched > 0 ? round(($dispatched / $processed) * 100, 2) : 0,
             'batches' => $batchCount,
             'doc_id_filter' => $this->option('doc-id'),
             'force' => $this->option('force'),
+            'limit' => $limit,
         ]);
 
         return self::SUCCESS;

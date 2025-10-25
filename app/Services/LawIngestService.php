@@ -249,12 +249,18 @@ class LawIngestService
     /**
      * Fetch URL with exponential backoff and jitter
      *
-     * @param string $url
-     * @param string $context
-     * @param bool $isPdf
-     * @param int $maxRetries
-     * @return string
-     * @throws \Exception
+     * Implements retry logic with:
+     * - Exponential backoff: 1s, 2s, 4s delays
+     * - Random jitter (0-50% of delay) to avoid thundering herd
+     * - Structured logging for all attempts and failures
+     * - Content-type validation for PDFs
+     *
+     * @param string $url URL to fetch
+     * @param string $context Context for logging (e.g., 'law_html', 'law_pdf')
+     * @param bool $isPdf Whether to validate PDF content type
+     * @param int $maxRetries Maximum number of retry attempts (default: 3)
+     * @return string Response body
+     * @throws \Exception If all retries are exhausted
      */
     protected function fetchWithRetry(string $url, string $context, bool $isPdf = false, int $maxRetries = 3): string
     {
@@ -331,17 +337,27 @@ class LawIngestService
     /**
      * Calculate exponential backoff delay with jitter
      *
+     * Formula: base_delay * 2^(attempt-1) + random_jitter
+     * Example delays:
+     * - Attempt 1: 1000ms + jitter (1000-1500ms)
+     * - Attempt 2: 2000ms + jitter (2000-3000ms)
+     * - Attempt 3: 4000ms + jitter (4000-6000ms)
+     *
+     * Jitter helps distribute retry attempts and avoid thundering herd problem
+     * when multiple processes are retrying simultaneously.
+     *
      * @param int $attempt Attempt number (1-based)
      * @return int Delay in milliseconds
      */
     protected function calculateBackoffDelay(int $attempt): int
     {
         // Exponential backoff: base_delay * 2^(attempt-1)
-        $baseDelay = 1000; // 1 second
+        $baseDelay = config('services.law_ingest.retry_base_delay', 1000); // 1 second default
         $exponentialDelay = $baseDelay * pow(2, $attempt - 1);
 
         // Add jitter: random value between 0 and 50% of the delay
-        $jitter = rand(0, (int)($exponentialDelay * 0.5));
+        $jitterPercent = config('services.law_ingest.retry_jitter_percent', 0.5);
+        $jitter = rand(0, (int)($exponentialDelay * $jitterPercent));
 
         return (int)($exponentialDelay + $jitter);
     }

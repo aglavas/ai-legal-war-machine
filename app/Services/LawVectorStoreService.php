@@ -173,12 +173,18 @@ class LawVectorStoreService
     /**
      * Call embeddings API with exponential backoff and jitter
      *
-     * @param array $inputs
-     * @param string $model
-     * @param string $docId
-     * @param int $maxRetries
-     * @return array
-     * @throws \Exception
+     * Implements robust retry logic for embedding generation:
+     * - Tracks API call duration for performance monitoring
+     * - Exponential backoff with jitter to handle rate limits
+     * - Detailed logging of retries and failures
+     * - Preserves error context for debugging
+     *
+     * @param array $inputs Array of text inputs to embed
+     * @param string $model Embedding model to use
+     * @param string $docId Document ID for logging context
+     * @param int $maxRetries Maximum number of retry attempts (default: 3)
+     * @return array Embeddings response from API
+     * @throws \Exception If all retries are exhausted
      */
     protected function callEmbeddingsWithRetry(array $inputs, string $model, string $docId, int $maxRetries = 3): array
     {
@@ -250,17 +256,23 @@ class LawVectorStoreService
     /**
      * Calculate exponential backoff delay with jitter
      *
+     * Uses configurable base delay and jitter percentage.
+     * Configuration keys:
+     * - services.embeddings.retry_base_delay (default: 1000ms)
+     * - services.embeddings.retry_jitter_percent (default: 0.5 = 50%)
+     *
      * @param int $attempt Attempt number (1-based)
      * @return int Delay in milliseconds
      */
     protected function calculateBackoffDelay(int $attempt): int
     {
         // Exponential backoff: base_delay * 2^(attempt-1)
-        $baseDelay = 1000; // 1 second
+        $baseDelay = config('services.embeddings.retry_base_delay', 1000); // 1 second default
         $exponentialDelay = $baseDelay * pow(2, $attempt - 1);
 
-        // Add jitter: random value between 0 and 50% of the delay
-        $jitter = rand(0, (int)($exponentialDelay * 0.5));
+        // Add jitter: random value between 0 and configured percentage of the delay
+        $jitterPercent = config('services.embeddings.retry_jitter_percent', 0.5);
+        $jitter = rand(0, (int)($exponentialDelay * $jitterPercent));
 
         return (int)($exponentialDelay + $jitter);
     }

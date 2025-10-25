@@ -145,17 +145,23 @@ class ZakonHrScraper
     /**
      * Calculate exponential backoff delay with jitter
      *
+     * Uses configurable base delay and jitter percentage.
+     * Configuration keys:
+     * - services.zakon_hr_scraper.retry_base_delay (default: 1000ms)
+     * - services.zakon_hr_scraper.retry_jitter_percent (default: 0.5 = 50%)
+     *
      * @param int $attempt Attempt number (1-based)
      * @return int Delay in milliseconds
      */
     protected function calculateBackoffDelay(int $attempt): int
     {
         // Exponential backoff: base_delay * 2^(attempt-1)
-        $baseDelay = 1000; // 1 second
+        $baseDelay = config('services.zakon_hr_scraper.retry_base_delay', 1000); // 1 second default
         $exponentialDelay = $baseDelay * pow(2, $attempt - 1);
 
-        // Add jitter: random value between 0 and 50% of the delay
-        $jitter = rand(0, (int)($exponentialDelay * 0.5));
+        // Add jitter: random value between 0 and configured percentage of the delay
+        $jitterPercent = config('services.zakon_hr_scraper.retry_jitter_percent', 0.5);
+        $jitter = rand(0, (int)($exponentialDelay * $jitterPercent));
 
         return (int)($exponentialDelay + $jitter);
     }

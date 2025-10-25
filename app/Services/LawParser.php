@@ -6,8 +6,32 @@ use Symfony\Component\DomCrawler\Crawler;
 
 class LawParser
 {
+    /**
+     * Split law HTML into individual articles.
+     *
+     * Handles multiple article number formats:
+     * - Standard: "Članak 24."
+     * - Uppercase: "CLANAK 24."
+     * - Lettered: "Članak 24a", "Članak 24.a", "Članak 24. a)"
+     * - With delimiters: "Članak 24)", "Članak 24("
+     *
+     * Special handling:
+     * - Non-breaking spaces (U+00A0) are normalized to regular spaces
+     * - NN markers like "(NN 123/20)" are preserved in article body
+     * - Lettered articles (24a, 24b) are merged into their base article (24)
+     * - Nested HTML tags and wrappers are handled
+     * - Missing <body> tags are handled gracefully
+     *
+     * @param string $html Raw HTML content of the law
+     * @return array Array of articles with 'number', 'heading_chain', and 'html' keys
+     */
     public function splitIntoArticles(string $html): array
     {
+        // Validate input
+        if (empty(trim($html))) {
+            return [['number' => '1', 'heading_chain' => [], 'html' => '']];
+        }
+
         $crawler = new Crawler($html);
         $bodyHtml = $crawler->filter('body')->count() ? $crawler->filter('body')->html() : $html;
 
