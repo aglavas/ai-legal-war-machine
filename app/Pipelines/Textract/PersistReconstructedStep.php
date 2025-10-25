@@ -6,6 +6,7 @@ use App\Models\CaseDocument;
 use App\Models\CaseDocumentUpload;
 use App\Models\LegalCase;
 use App\Services\Ocr\LegalMetadataExtractor;
+use App\Services\CaseIngestPipeline;
 use App\Services\OpenAIService;
 use Closure;
 use Illuminate\Support\Facades\Log;
@@ -15,7 +16,8 @@ use Illuminate\Support\Str;
 class PersistReconstructedStep
 {
     public function __construct(
-        private LegalMetadataExtractor $metadataExtractor
+        private LegalMetadataExtractor $metadataExtractor,
+        private CaseIngestPipeline $ingestPipeline
     ) {}
 
     public function handle(array $payload, Closure $next): mixed
@@ -104,69 +106,79 @@ class PersistReconstructedStep
             }
         }
 
-        // Chunking
+        // Get OCR quality metrics from payload if available
+        $qualityMetrics = $payload['qualityMetrics'] ?? [];
+        $blocks = $payload['blocks'] ?? [];
+
+        // Prepare ingest options
         $chunkCfg = config('vizra-adk.vector_memory.chunking', []);
-        $size = (int) ($chunkCfg['chunk_size'] ?? 1000);
-        $overlap = (int) ($chunkCfg['overlap'] ?? 200);
-        if ($size < 100) $size = 1000;
-        if ($overlap < 0) $overlap = 0;
-        $chunks = $this->chunkText($fullText, $size, $overlap);
+        $ingestOptions = [
+            'chunk_size' => (int) ($chunkCfg['chunk_size'] ?? 1200),
+            'overlap' => (int) ($chunkCfg['overlap'] ?? 150),
+            'language' => 'hr',  // Croatian by default
+            'min_confidence' => (float) config('vizra-adk.ocr.min_confidence', 0.82),
+            'min_coverage' => (float) config('vizra-adk.ocr.min_coverage', 0.75),
+            'skip_embedding_on_low_quality' => (bool) config('vizra-adk.ocr.skip_embedding_on_low_quality', false),
+            'upload_id' => $upload->id,
+            'model' => config('vizra-adk.vector_memory.embedding_models.openai', 'text-embedding-3-small'),
+            'provider' => config('vizra-adk.vector_memory.embedding_provider', 'openai'),
+            'metadata' => [
+                'drive_file_id' => $driveFileId,
+                'drive_file_name' => $fileName,
+                's3_input_key' => $s3Input,
+                's3_json_key' => $s3Json,
+                's3_output_key' => $s3Output,
+                'local_json_path' => $jsonPath ? ltrim(Str::replaceFirst($localRoot, '', $jsonPath), '/') : null,
+                'local_pdf_path' => $localRel,
+                'source' => 'drive-textract',
+                'ocr_quality' => $qualityMetrics,
+            ] + ($legalMetadata?->toArray() ?? []),
+        ];
 
-        // Embeddings
-        $embeddingProvider = (string) config('vizra-adk.vector_memory.embedding_provider', 'openai');
-        $embeddingModel = null;
-        if ($embeddingProvider === 'openai') {
-            $embeddingModel = (string) config('vizra-adk.vector_memory.embedding_models.openai', 'text-embedding-3-small');
-        }
-
-        $vectors = [];
+        // Use the CaseIngestPipeline for quality-gated ingestion
         try {
-            if ($embeddingProvider === 'openai' && count($chunks) > 0) {
-                /** @var OpenAIService $openai */
-                $openai = app(OpenAIService::class);
-                $resp = $openai->embeddings(array_values($chunks), $embeddingModel ?: null);
-                $vectors = $resp['data'] ?? [];
-            }
+            $result = $this->ingestPipeline->ingest(
+                caseId: $case->id,
+                docId: 'doc-' . $driveFileId,
+                rawText: $fullText,
+                ocrBlocks: $blocks,
+                options: $ingestOptions
+            );
+
+            Log::info('Document ingestion via pipeline', [
+                'driveFileId' => $driveFileId,
+                'status' => $result['status'],
+                'chunks' => $result['chunk_count'] ?? 0,
+                'needs_review' => $result['needs_review'],
+            ]);
+
+            // Store the ingest result in payload for downstream tracking
+            $payload['ingestResult'] = $result;
+
         } catch (\Throwable $e) {
-            Log::warning('Embedding generation failed', ['error' => $e->getMessage()]);
-        }
+            Log::error('CaseIngestPipeline failed, falling back to direct save', [
+                'driveFileId' => $driveFileId,
+                'error' => $e->getMessage(),
+            ]);
 
-        $dims = (int) (config("vizra-adk.vector_memory.dimensions.$embeddingModel") ?? 0);
-
-        // Create document chunks
-        foreach ($chunks as $i => $text) {
-            $vec = $vectors[$i]['embedding'] ?? null;
-            $norm = is_array($vec) ? $this->l2norm($vec) : null;
-
+            // Fallback: Create a single document record without chunking/embedding
             $row = new CaseDocument([
                 'id' => (string) Str::ulid(),
                 'case_id' => $case->id,
                 'doc_id' => 'doc-' . $driveFileId,
                 'upload_id' => $upload->id,
-                'title' => $fileName . ' (chunk ' . ($i + 1) . '/' . max(1, count($chunks)) . ')',
+                'title' => $fileName,
                 'category' => 'textract',
                 'language' => null,
-                'tags' => ['textract', 'reconstructed'],
-                'chunk_index' => $i,
-                'content' => $text,
-                'metadata' => [
-                    'drive_file_id' => $driveFileId,
-                    's3_input_key' => $s3Input,
-                    's3_json_key' => $s3Json,
-                    's3_output_key' => $s3Output,
-                    'local_json_path' => $jsonPath ? ltrim(Str::replaceFirst($localRoot, '', $jsonPath), '/') : null,
-                    'local_pdf_path' => $localRel,
-                ],
+                'tags' => ['textract', 'reconstructed', 'pipeline_failed'],
+                'chunk_index' => 0,
+                'content' => $fullText,
+                'metadata' => $ingestOptions['metadata'],
                 'actual' => $legalMetadata?->toArray(),
                 'source' => 'drive-textract',
                 'source_id' => $driveFileId,
-                'embedding_provider' => $embeddingProvider,
-                'embedding_model' => $embeddingModel,
-                'embedding_dimensions' => $dims ?: (is_array($vec) ? count($vec) : null),
-                'embedding_norm' => $norm,
-                'content_hash' => $text !== '' ? hash('sha256', $text) : null,
+                'content_hash' => hash('sha256', $fullText),
                 'token_count' => null,
-                'embedding_vector' => is_array($vec) ? $vec : null,
             ]);
             $row->save();
         }
@@ -182,40 +194,5 @@ class PersistReconstructedStep
         }
 
         return $next($payload);
-    }
-
-    /**
-     * Simple sliding window chunker by characters.
-     * @param string $text
-     * @param int $size
-     * @param int $overlap
-     * @return array<int,string>
-     */
-    private function chunkText(string $text, int $size, int $overlap): array
-    {
-        $text = trim($text);
-        if ($text === '') return [];
-        if ($size <= 0) return [$text];
-        $chunks = [];
-        $start = 0;
-        $len = mb_strlen($text, 'UTF-8');
-        while ($start < $len) {
-            $end = min($len, $start + $size);
-            $chunk = mb_substr($text, $start, $end - $start, 'UTF-8');
-            $chunks[] = $chunk;
-            if ($end >= $len) break;
-            $start = max(0, $end - $overlap);
-        }
-        return $chunks;
-    }
-
-    private function l2norm(array $vec): ?float
-    {
-        if (!count($vec)) return null;
-        $sum = 0.0;
-        foreach ($vec as $v) {
-            $sum += ((float)$v) * ((float)$v);
-        }
-        return sqrt($sum);
     }
 }
