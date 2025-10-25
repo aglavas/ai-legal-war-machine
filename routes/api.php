@@ -53,6 +53,16 @@ Route::prefix('uploads')->group(function () {
     Route::delete('{uploadId}', [UploadController::class, 'cancel']);
 });
 
+
+Route::prefix('agent')->group(function () {
+    // Research runs
+    Route::post('research/start', [\App\Http\Controllers\AgentController::class, 'startResearch']);
+    Route::get('research', [\App\Http\Controllers\AgentController::class, 'listResearch']);
+    Route::get('research/{id}', [\App\Http\Controllers\AgentController::class, 'getResearch']);
+    Route::get('research/{id}/evaluation', [\App\Http\Controllers\AgentController::class, 'getEvaluation']);
+    Route::delete('research/{id}', [\App\Http\Controllers\AgentController::class, 'deleteResearch']);
+});
+
 Route::prefix('search')->group(function () {
     // Unified search across all corpora
     Route::post('/', [SearchController::class, 'search']);
@@ -65,4 +75,5 @@ Route::prefix('search')->group(function () {
     // Advanced search
     Route::post('/hybrid', [SearchController::class, 'hybridSearch']);
     Route::post('/with-citations', [SearchController::class, 'searchWithCitations']);
+
 });
